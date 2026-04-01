@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# MediaPipe model files (large, auto-downloaded at runtime)
+*.task
+*.tflite
+*.onnx
+
+# Workout CSV exports
+workout_*.csv
+
+# Taharrak user data
+~/.taharrak/
+.taharrak/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets / keys
+.env
+*.pem
+*.key
