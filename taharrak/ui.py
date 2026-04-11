@@ -198,7 +198,8 @@ def screen_weight_input(frame, exercise: Exercise, weight_kg: float,
 # ── Screen: CALIBRATION ───────────────────────────────────────────────────────
 
 def screen_calibration(frame, result, exercise: Exercise,
-                       can_start: bool, lang: str, cfg: dict):
+                       can_start: bool, cam_feedback: list,
+                       lang: str, cfg: dict):
     h, w = frame.shape[:2]
 
     trect(frame, 0, 0, w, 105, (10, 10, 30), 0.82, False)
@@ -211,7 +212,6 @@ def screen_calibration(frame, result, exercise: Exercise,
         lm_px = lm_to_px(lm, w, h, cfg.get("mirror_mode", True))
         draw_skeleton(frame, lm_px)
 
-        # Left arm quality uses exercise's joint triplet
         l_vis = [lm[i].visibility for i in exercise.joints_left]
         r_vis = [lm[i].visibility for i in exercise.joints_right]
         VG, VW = cfg.get("vis_good", 0.68), cfg.get("vis_weak", 0.38)
@@ -224,6 +224,24 @@ def screen_calibration(frame, result, exercise: Exercise,
         if r_q != "LOST":
             a, b, c = exercise.joints_right
             draw_arm(frame, lm_px, a, b, c, R_COL)
+
+        # ── Camera position feedback panel ──────────────────────────────
+        fb_y = h // 2 - 20
+        if cam_feedback:
+            panel_h = 42 + len(cam_feedback) * 32
+            trect(frame, w//2 - 295, fb_y, w//2 + 295, fb_y + panel_h, (28, 12, 5), 0.88)
+            put(frame, t(lang, "cam_feedback_title"),
+                (w//2 - 278, fb_y + 27), 0.68, ORANGE, 1)
+            for i, key in enumerate(cam_feedback):
+                put(frame, f"  \u25cf  {t(lang, key)}",
+                    (w//2 - 270, fb_y + 52 + i * 32), 0.70, YELLOW, 1)
+        elif l_q == "LOST" or r_q == "LOST":
+            trect(frame, w//2 - 270, fb_y, w//2 + 270, fb_y + 48, (0, 0, 55))
+            center_put(frame, t(lang, "improve_hint"), fb_y + 34, 0.65, ORANGE, 1)
+        else:
+            trect(frame, w//2 - 185, fb_y, w//2 + 185, fb_y + 44, (0, 42, 0), 0.85)
+            center_put(frame, t(lang, "cam_good"), fb_y + 30, 0.80, GREEN, 2)
+
     else:
         trect(frame, w//2 - 240, h//2 - 35, w//2 + 240, h//2 + 42, (0, 0, 70))
         center_put(frame, t(lang, "no_person"), h//2 + 12, 0.85, RED, 2)
@@ -239,10 +257,6 @@ def screen_calibration(frame, result, exercise: Exercise,
     put(frame, t(lang, "right"), (w - 18 - PW + 12, 148), 0.72, GRAY, 1)
     put(frame, r_q,              (w - 18 - PW + 12, 190), 0.92, q_color(r_q), 2)
     vis_bar(frame, w - 18 - PW + 12, 200, PW - 24, r_q)
-
-    if not (result and result.pose_landmarks) or l_q == "LOST" or r_q == "LOST":
-        trect(frame, w//2 - 270, h//2 + 35, w//2 + 270, h//2 + 75, (0, 0, 55))
-        center_put(frame, t(lang, "improve_hint"), h//2 + 62, 0.65, ORANGE, 1)
 
     if can_start:
         trect(frame, w//2 - 185, h - 88, w//2 + 185, h - 18, (0, 50, 0))

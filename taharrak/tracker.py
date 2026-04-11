@@ -14,6 +14,52 @@ from datetime import datetime
 
 import numpy as np
 
+
+# ── Smoothed Landmark ─────────────────────────────────────────────────────────
+
+class SmoothedLandmark:
+    """Lightweight landmark proxy returned by LandmarkSmoother."""
+    __slots__ = ('x', 'y', 'z', 'visibility')
+
+    def __init__(self, x: float, y: float, z: float, visibility: float):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.visibility = visibility
+
+
+# ── Landmark Smoother ─────────────────────────────────────────────────────────
+
+class LandmarkSmoother:
+    """
+    Sliding-window average of landmark x/y/z coordinates to reduce jitter
+    caused by loose clothing obscuring true joint positions.
+    Visibility is kept raw (not averaged) so detection quality is unaffected.
+    Window size is configurable via config.json → landmark_smooth_window.
+    """
+
+    def __init__(self, num_landmarks: int = 33, window: int = 7):
+        self._bufs: list = [deque(maxlen=window) for _ in range(num_landmarks)]
+
+    def smooth(self, landmarks) -> list:
+        """Takes a raw MediaPipe landmark list, returns List[SmoothedLandmark]."""
+        result = []
+        for i, lm in enumerate(landmarks):
+            buf = self._bufs[i]
+            buf.append((lm.x, lm.y, lm.z))
+            n = len(buf)
+            result.append(SmoothedLandmark(
+                x=sum(p[0] for p in buf) / n,
+                y=sum(p[1] for p in buf) / n,
+                z=sum(p[2] for p in buf) / n,
+                visibility=lm.visibility,
+            ))
+        return result
+
+    def reset(self):
+        for b in self._bufs:
+            b.clear()
+
 try:
     import pyttsx3
     _TTS_OK = True

@@ -27,5 +27,8 @@
     "db_path": "~/.taharrak/sessions.db",
     "arabic_font_path": "assets/NotoNaskhArabic-Regular.ttf",
     "default_language": "en",
-    "warmup_mode": true
+    "warmup_mode": true,
+    "landmark_smooth_window": 7,
+    "segmentation_enabled": true,
+    "segmentation_bg_color": [10, 10, 25]
 }

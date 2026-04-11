@@ -79,6 +79,18 @@ MESSAGES = {
         "right":            "RIGHT",
         "controls_workout": "S:end set   R:reset set   Q:finish session",
         "controls_select":  "1-5:exercise   H:history   L:language   Q:quit",
+        # Camera position feedback
+        "cam_feedback_title": "Camera Position Check",
+        "cam_good":           "Camera position: GOOD",
+        "cam_too_close":      "Step back — you're too close",
+        "cam_too_far":        "Step forward — you're too far",
+        "cam_too_low":        "Camera too low — raise it to shoulder height",
+        "cam_too_high":       "Camera too high — lower it",
+        "cam_move_right":     "Move right — you're off center",
+        "cam_move_left":      "Move left — you're off center",
+        "cam_turn_left":      "Turn slightly left to face camera",
+        "cam_turn_right":     "Turn slightly right to face camera",
+        "cam_poor_vis":       "Poor visibility — improve lighting",
     },
     "ar": {
         "app_title":        "تحرك — لياقة بالذكاء الاصطناعي",
@@ -141,6 +153,18 @@ MESSAGES = {
         "right":            "يمين",
         "controls_workout": "S:إنهاء  R:إعادة  Q:إنهاء الجلسة",
         "controls_select":  "١-٥:تمرين  H:سجل  L:لغة  Q:خروج",
+        # Camera position feedback
+        "cam_feedback_title": "التحقق من وضع الكاميرا",
+        "cam_good":           "وضع الكاميرا: جيد",
+        "cam_too_close":      "تراجع للخلف — أنت قريب جداً",
+        "cam_too_far":        "تقدم للأمام — أنت بعيد جداً",
+        "cam_too_low":        "الكاميرا منخفضة — ارفعها إلى مستوى الكتف",
+        "cam_too_high":       "الكاميرا مرتفعة — أنزلها",
+        "cam_move_right":     "تحرك يميناً — لست في المنتصف",
+        "cam_move_left":      "تحرك يساراً — لست في المنتصف",
+        "cam_turn_left":      "استدر قليلاً لليسار",
+        "cam_turn_right":     "استدر قليلاً لليمين",
+        "cam_poor_vis":       "الرؤية ضعيفة — حسّن الإضاءة",
     },
 }
 
