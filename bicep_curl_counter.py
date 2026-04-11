@@ -25,8 +25,9 @@ from mediapipe.tasks.python import vision
 from taharrak.exercises  import EXERCISES
 from taharrak.tracker    import (RepTracker, VoiceEngine, OneEuroLandmarkSmoother,
                                  TrackingGuard, LiveTrustGate, LiveDiagnostics)
-from taharrak.analysis   import (det_quality_ex, build_msgs,
+from taharrak.analysis   import (det_quality_ex, build_msgs, build_post_rep_summary,
                                   analyze_camera_position, check_exercise_framing)
+from taharrak.correction import CorrectionEngine
 from taharrak.session    import save_csv, persist_session
 from taharrak.messages   import t
 from taharrak.database   import (init_db, get_last_sessions,
@@ -209,6 +210,8 @@ def main():
     guard     = None
     trust_gate = None
     diagnostics = LiveDiagnostics()
+    engine    = CorrectionEngine()
+    post_rep_flash: dict = {}   # side → (msg_list, expiry_time)
     show_diag = False
     frame_idx = 0
     mirror    = cfg.get("mirror_mode", True)
@@ -344,6 +347,11 @@ def main():
                                 if done and sc is not None:
                                     score_flash["left"] = (sc, time.time() + cfg["score_flash_duration"])
                                     voice.say(f"{t(lang,'left')} {trackers[0].rep_count}. {sc}", 1.0)
+                                    correction, summary = engine.assess_rep(trackers[0], quals[0], lang)
+                                    trackers[0].last_correction = correction
+                                    rep_msgs = build_post_rep_summary(summary, lang)
+                                    if rep_msgs:
+                                        post_rep_flash["left"] = (rep_msgs, time.time() + cfg["score_flash_duration"])
 
                         if trust.render_allowed and r_q_raw != "LOST":
                             a, b, c = exercise.joints_right
@@ -359,6 +367,11 @@ def main():
                                 if done and sc is not None:
                                     score_flash["right"] = (sc, time.time() + cfg["score_flash_duration"])
                                     voice.say(f"{t(lang,'right')} {trackers[1].rep_count}. {sc}", 1.0)
+                                    correction, summary = engine.assess_rep(trackers[1], quals[1], lang)
+                                    trackers[1].last_correction = correction
+                                    rep_msgs = build_post_rep_summary(summary, lang)
+                                    if rep_msgs:
+                                        post_rep_flash["right"] = (rep_msgs, time.time() + cfg["score_flash_duration"])
                     else:
                         r_q = trackers[0].smooth_quality(r_q_raw)
                         quals = [r_q]
@@ -386,6 +399,11 @@ def main():
                                 if done and sc is not None:
                                     score_flash["center"] = (sc, time.time() + cfg["score_flash_duration"])
                                     voice.say(f"Rep {trackers[0].rep_count}. Score {sc}", 1.0)
+                                    correction, summary = engine.assess_rep(trackers[0], quals[0], lang)
+                                    trackers[0].last_correction = correction
+                                    rep_msgs = build_post_rep_summary(summary, lang)
+                                    if rep_msgs:
+                                        post_rep_flash["center"] = (rep_msgs, time.time() + cfg["score_flash_duration"])
                 elif trackers:
                     for tr in trackers:
                         tr.smooth_quality("LOST")
@@ -403,10 +421,20 @@ def main():
                     lm_smoother.reset()
                     guard.reset()
 
-                msgs = build_msgs(trackers, angles, swings,
-                                  exercise, voice, cfg, lang,
-                                  qualities=quals, trust=trust,
-                                  cam_feedback=cam_feedback)
+                # Post-rep summary overrides live coaching for score_flash_duration
+                _now = time.time()
+                _active_post_rep = next(
+                    (flash_msgs for flash_msgs, expiry in post_rep_flash.values()
+                     if _now < expiry),
+                    None,
+                )
+                if _active_post_rep:
+                    msgs = _active_post_rep
+                else:
+                    msgs = build_msgs(trackers, angles, swings,
+                                      exercise, voice, cfg, lang,
+                                      qualities=quals, trust=trust,
+                                      cam_feedback=cam_feedback)
 
                 if exercise.bilateral:
                     ui.screen_workout_bilateral(
@@ -447,6 +475,8 @@ def main():
                                lang, exercise.bilateral)
                 if elapsed >= cfg["rest_duration"]:
                     _start_next_set(trackers, set_count)
+                    engine.reset()
+                    post_rep_flash.clear()
                     state = "WORKOUT"
                     voice.say(t(lang, "go"))
 
@@ -512,6 +542,8 @@ def main():
                     guard         = TrackingGuard(cfg)
                     trust_gate    = LiveTrustGate(cfg, exercise.bilateral)
                     diagnostics   = LiveDiagnostics()
+                    engine        = CorrectionEngine()
+                    post_rep_flash = {}
                     set_count     = 0
                     set_history   = []
                     session_start = time.time()
@@ -547,10 +579,14 @@ def main():
                 elif key == ord("r"):
                     for tr in trackers:
                         tr.reset_set()
+                    engine.reset()
+                    post_rep_flash.clear()
 
             elif state == "REST":
                 if key == ord(" "):
                     _start_next_set(trackers, set_count)
+                    engine.reset()
+                    post_rep_flash.clear()
                     state = "WORKOUT"
                     voice.say(t(lang, "go"))
                 elif key in (ord("q"), 27):

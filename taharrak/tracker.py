@@ -366,6 +366,8 @@ class RepTracker:
             "asymmetry": 0,
             "instability": 0,
         }
+        # Most recent RepCorrection for this tracker (set by CorrectionEngine.assess_rep)
+        self.last_correction = None
 
         # Per-set robustness counters (used by eval harness + coaching)
         self.aborted_reps      = 0   # reps discarded by _abort_rep()
@@ -762,6 +764,7 @@ class RepTracker:
         self.aborted_reps     = 0
         self.rejected_reps    = 0
         self.event_log        = []
+        self.last_correction  = None
         self._angle_filter.reset()
         self._sh_y_hist.clear()
         # Reset recovery state so the next set starts fresh

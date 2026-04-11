@@ -116,6 +116,10 @@ MESSAGES = {
         "chest_up":             "Chest up",
         "knees_over_toes":      "Keep knees over toes",
         "stand_tall":           "Stand tall",
+        # Post-rep correction summaries
+        "correction_new":       "{cue}",
+        "correction_persists":  "Still: {cue}",
+        "correction_fixed":     "Fixed!",
     },
     "ar": {
         "app_title":        "تحرك — لياقة بالذكاء الاصطناعي",
@@ -215,6 +219,10 @@ MESSAGES = {
         "chest_up":             "ارفع صدرك",
         "knees_over_toes":      "وجّه الركبتين فوق أصابع القدم",
         "stand_tall":           "قف باستقامة",
+        # Post-rep correction summaries
+        "correction_new":       "{cue}",
+        "correction_persists":  "لا يزال: {cue}",
+        "correction_fixed":     "أحسنت!",
     },
 }
 

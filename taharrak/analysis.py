@@ -1,10 +1,11 @@
 """
 Pose analysis helpers for Taharrak.
 
-  joint_reliability     — combined visibility + presence score for one landmark
-  det_quality_ex        — per-arm detection quality (GOOD / WEAK / LOST)
+  joint_reliability       — combined visibility + presence score for one landmark
+  det_quality_ex          — per-arm detection quality (GOOD / WEAK / LOST)
   analyze_camera_position — actionable camera setup feedback
-  build_msgs            — real-time form feedback strings for the workout HUD
+  build_msgs              — real-time form feedback (one-cue policy enforced)
+  build_post_rep_summary  — single-line post-rep verdict
 """
 
 from taharrak.exercises.base import Exercise
@@ -258,6 +259,9 @@ def _profile_hint(tracker, exercise: Exercise, lang: str) -> str | None:
 
 _SIDES_EN = ["LEFT", "RIGHT"]
 
+# Severity sort order — lower number wins (one-cue policy tiebreak)
+_SEVERITY_ORDER = {"error": 0, "warning": 1, "ok": 2}
+
 
 def build_msgs(trackers: list, angles: list, swings: list,
                exercise: Exercise, voice, cfg: dict, lang: str,
@@ -265,7 +269,12 @@ def build_msgs(trackers: list, angles: list, swings: list,
                trust = None,
                cam_feedback: list[str] | None = None) -> list:
     """
-    Build real-time form feedback message list for the workout HUD.
+    Build real-time form feedback for the workout HUD.
+
+    One-cue policy: at most ONE correction is returned at a time.
+    When multiple faults are detected (bilateral exercise, or both a profile
+    fault and a swing), the highest-severity / highest-priority one wins.
+
     Returns list of (text, severity) tuples where severity is one of:
       "error"   — must-fix issue (swinging, too fast)
       "warning" — ROM / form nudge
@@ -276,8 +285,9 @@ def build_msgs(trackers: list, angles: list, swings: list,
     if trust is not None and not trust.coaching_allowed:
         return build_setup_msgs(qualities or [], cam_feedback or [], trust, lang)
 
-    msgs      = []
-    sides_ln  = [t(lang, "left"), t(lang, "right")]
+    # Collect all candidate corrections from every tracker, then pick one.
+    candidates = []   # list of (text, severity, voice_text_or_None)
+    sides_ln   = [t(lang, "left"), t(lang, "right")]
 
     for i, (tracker, angle, swinging) in enumerate(zip(trackers, angles, swings)):
         side_en = _SIDES_EN[i] if i < 2 else "CENTER"
@@ -286,42 +296,81 @@ def build_msgs(trackers: list, angles: list, swings: list,
 
         profile_msg = _profile_feedback(tracker, angle, exercise, quality, lang)
         if profile_msg is not None:
-            msgs.append(profile_msg)
+            candidates.append((*profile_msg, None))
 
         if profile_msg is None and swinging and (qualities is None or qualities[i] == "GOOD"):
-            msgs.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error"))
-            voice.say(f"Stop swinging your {side_en.lower()} side", 4.0)
+            vtext = f"Stop swinging your {side_en.lower()} side"
+            candidates.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error", vtext))
 
         if angle is None:
             continue
 
         if profile_msg is None and not exercise.invert:
             if tracker.stage == "start" and angle > exercise.angle_down - 12:
-                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
+                candidates.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning", None))
             elif tracker.stage == "end" and angle > exercise.angle_up + 15:
-                msgs.append((f"  {t(lang, 'curl_fully', side=side_ln)}", "warning"))
+                candidates.append((f"  {t(lang, 'curl_fully', side=side_ln)}", "warning", None))
         elif profile_msg is None:
             if tracker.stage == "start" and angle > exercise.angle_down + 15:
-                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
+                candidates.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning", None))
             elif tracker.stage == "end" and angle < exercise.angle_up - 15:
-                msgs.append((f"  {t(lang, 'press_up', side=side_ln)}", "warning"))
+                candidates.append((f"  {t(lang, 'press_up', side=side_ln)}", "warning", None))
 
         if 0 < tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
-            msgs.append((f"  {t(lang, 'slow_down', side=side_ln)}", "error"))
-            voice.say("Slow down", 5.0)
+            candidates.append((f"  {t(lang, 'slow_down', side=side_ln)}", "error", "Slow down"))
 
-    if not msgs:
-        hints = []
-        for i, tracker in enumerate(trackers):
-            side_ln = sides_ln[i] if i < len(sides_ln) else ""
-            profile_hint = _profile_hint(tracker, exercise, lang)
-            if profile_hint:
-                hints.append(profile_hint)
-            elif tracker.stage == "end":
-                hints.append(t(lang, "lower_slowly", side=side_ln))
-            elif tracker.stage == "start":
-                hints.append(t(lang, "curl_up", side=side_ln))
-        if hints:
-            msgs.append(("  " + "   ·   ".join(hints), "ok"))
+    # ── One-cue policy ────────────────────────────────────────────────
+    if candidates:
+        candidates.sort(key=lambda c: _SEVERITY_ORDER.get(c[1], 9))
+        text, severity, vtext = candidates[0]
+        if vtext:
+            voice.say(vtext, 4.0)
+        return [(text, severity)]
 
-    return msgs
+    # No corrections — show positive guidance hint
+    hints = []
+    for i, tracker in enumerate(trackers):
+        side_ln = sides_ln[i] if i < len(sides_ln) else ""
+        profile_hint = _profile_hint(tracker, exercise, lang)
+        if profile_hint:
+            hints.append(profile_hint)
+        elif tracker.stage == "end":
+            hints.append(t(lang, "lower_slowly", side=side_ln))
+        elif tracker.stage == "start":
+            hints.append(t(lang, "curl_up", side=side_ln))
+    if hints:
+        return [("  " + "   ·   ".join(hints), "ok")]
+    return []
+
+
+def build_post_rep_summary(summary: "tuple | None", lang: str) -> list:
+    """
+    Build the post-rep 1-line message shown briefly after a rep completes.
+
+    ``summary`` is the (verdict_key, cue_text) tuple returned by
+    CorrectionEngine.assess_rep(), or None for a clean rep.
+
+    Returns a list of (text, severity) tuples — same format as build_msgs.
+    Empty list when the rep was clean (nothing worth saying).
+
+    Verdict display
+    ───────────────
+    correction_new      : show the cue directly              → "warning"
+    correction_persists : "Still: {cue}"                     → "warning"
+    correction_fixed    : "Fixed!"  (old fault gone, new present) → "ok"
+    """
+    if summary is None:
+        return []
+
+    verdict_key, cue_text = summary
+
+    if verdict_key == "correction_persists":
+        text = f"  {t(lang, 'correction_persists', cue=cue_text)}"
+        return [(text, "warning")]
+
+    if verdict_key == "correction_fixed":
+        # Tell the user they fixed it; the new fault will appear next frame
+        return [(f"  {t(lang, 'correction_fixed')}", "ok")]
+
+    # correction_new — just surface the cue, no prefix needed
+    return [(f"  {cue_text}", "warning")]
