@@ -24,6 +24,7 @@ For Streamlit Community Cloud deployment:
 - Streamlit Cloud may require root-level `packages.txt`
 - use `libgl1`, `libgles2`, and `libegl1` in that file
 - preferably use Python `3.12` in Streamlit Cloud Advanced settings
+- if webcam connection fails on a restrictive network, configure TURN secrets
 
 ---
 
@@ -127,5 +128,18 @@ Implementation note:
 
 The app uses public Google STUN servers by default.
 
-If the webcam feed cannot connect behind a strict firewall or symmetric NAT,
-you may need to add a TURN server in `_RTC_CONFIG` inside [app.py](./app.py).
+- **STUN** is enough on many home and office networks.
+- **TURN** relays traffic and is often needed on restrictive networks,
+  symmetric NAT, or locked-down corporate/mobile setups.
+
+To configure TURN on Streamlit Community Cloud, add these secrets:
+
+```toml
+TURN_URL = "turn:your-turn-server:3478?transport=udp"
+TURN_USERNAME = "your-username"
+TURN_CREDENTIAL = "your-password"
+```
+
+`TURN_URL` may be a single URL or multiple URLs separated by new lines.
+
+If the secrets are absent, the app falls back to STUN-only mode.

@@ -24,6 +24,38 @@ class TestStreamlitRuntimeSettings(unittest.TestCase):
         self.assertIn("segmentation", warning)
 
 
+class TestRtcConfigHelpers(unittest.TestCase):
+    def test_coerce_urls_accepts_multiline_string(self):
+        urls = app._coerce_urls("turn:a.example.com\nturn:b.example.com")
+        self.assertEqual(urls, ["turn:a.example.com", "turn:b.example.com"])
+
+    def test_build_rtc_config_falls_back_to_stun_only(self):
+        rtc = app._build_rtc_config(secrets={})
+        self.assertEqual(len(rtc["iceServers"]), 3)
+        self.assertTrue(all("stun:" in server["urls"][0] for server in rtc["iceServers"]))
+
+    def test_build_rtc_config_adds_turn_server_when_secrets_exist(self):
+        rtc = app._build_rtc_config(secrets={
+            "TURN_URL": "turn:relay.example.com:3478?transport=udp\nturns:relay.example.com:5349",
+            "TURN_USERNAME": "user1",
+            "TURN_CREDENTIAL": "pass1",
+        })
+        self.assertEqual(len(rtc["iceServers"]), 4)
+        turn_server = rtc["iceServers"][-1]
+        self.assertEqual(
+            turn_server["urls"],
+            ["turn:relay.example.com:3478?transport=udp", "turns:relay.example.com:5349"],
+        )
+        self.assertEqual(turn_server["username"], "user1")
+        self.assertEqual(turn_server["credential"], "pass1")
+
+    def test_connection_help_message_mentions_retry_and_turn(self):
+        message = app._connection_help_message().lower()
+        self.assertIn("refresh", message)
+        self.assertIn("network", message)
+        self.assertIn("turn", message)
+
+
 class TestVideoTimestamps(unittest.TestCase):
     def test_timestamp_uses_frame_time_when_available(self):
         ts = app._next_video_timestamp_ms(None, frame_time_s=1.234)

@@ -83,15 +83,11 @@ _MODEL_URL  = (
 
 # ── WebRTC ────────────────────────────────────────────────────────────────────
 
-_RTC_CONFIG = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-        ]
-    }
-)
+_DEFAULT_ICE_SERVERS = [
+    {"urls": ["stun:stun.l.google.com:19302"]},
+    {"urls": ["stun:stun1.l.google.com:19302"]},
+    {"urls": ["stun:stun2.l.google.com:19302"]},
+]
 
 # ── Config defaults (mirrors load_config in bicep_curl_counter.py) ────────────
 
@@ -220,6 +216,55 @@ def _apply_segmentation(frame: np.ndarray, result, bg_color: tuple[int, int, int
     return cv2.convertScaleAbs(
         frame.astype(np.float32) * (mask3 / 255.0) +
         bg.astype(np.float32) * (1.0 - mask3 / 255.0)
+    )
+
+
+def _coerce_urls(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    text = str(value).replace(",", "\n")
+    return [part.strip() for part in text.splitlines() if part.strip()]
+
+
+def _secret_value(name: str, secrets=None):
+    if secrets is None:
+        try:
+            secrets = st.secrets
+        except Exception:
+            return None
+    if secrets is None:
+        return None
+    getter = getattr(secrets, "get", None)
+    if callable(getter):
+        return getter(name)
+    try:
+        return secrets[name]
+    except Exception:
+        return None
+
+
+def _build_rtc_config(secrets=None) -> RTCConfiguration:
+    ice_servers = list(_DEFAULT_ICE_SERVERS)
+    turn_urls = _coerce_urls(_secret_value("TURN_URL", secrets))
+    turn_username = _secret_value("TURN_USERNAME", secrets)
+    turn_credential = _secret_value("TURN_CREDENTIAL", secrets)
+
+    if turn_urls and turn_username and turn_credential:
+        ice_servers.append({
+            "urls": turn_urls,
+            "username": str(turn_username),
+            "credential": str(turn_credential),
+        })
+
+    return RTCConfiguration({"iceServers": ice_servers})
+
+
+def _connection_help_message() -> str:
+    return (
+        "If the webcam panel does not connect, refresh and retry, try another "
+        "network, and note that TURN may be required on restrictive networks."
     )
 
 
@@ -786,7 +831,7 @@ def main() -> None:
     ctx = webrtc_streamer(
         key="taharrak",
         video_processor_factory=_factory,
-        rtc_configuration=_RTC_CONFIG,
+        rtc_configuration=_build_rtc_config(),
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
     )
@@ -812,6 +857,7 @@ def main() -> None:
             "Form cues will appear on the live video.",
             icon="ℹ️",
         )
+        st.caption(_connection_help_message())
 
 
 def _render_stats(snap: dict, exercise, lang: str, show_diagnostics: bool = False) -> None:
