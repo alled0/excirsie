@@ -6,6 +6,7 @@ import numpy as np
 import taharrak.ui as ui
 from taharrak.analysis import build_msgs
 from taharrak.exercises.bicep_curl import BICEP_CURL
+from taharrak.messages import t
 from taharrak.tracker import LiveDiagnostics, LiveTrustGate
 
 
@@ -15,12 +16,14 @@ class _Voice:
 
 
 class _Tracker:
-    def __init__(self, side="left", stage=None, rep_elapsed=0.0, rep_count=0):
+    def __init__(self, side="left", stage=None, rep_elapsed=0.0, rep_count=0,
+                 recovering=False):
         self.side = side
         self.stage = stage
         self.rep_elapsed = rep_elapsed
         self.rep_count = rep_count
         self.form_scores = []
+        self._recovering = recovering
 
     @property
     def avg_score(self):
@@ -139,6 +142,30 @@ class TestCoachingFallback(unittest.TestCase):
         self.assertNotIn("Extend fully", text)
         self.assertNotIn("swing", text.lower())
 
+    def test_hold_still_message_comes_from_message_catalog(self):
+        trust_gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 5,
+        }, bilateral=False)
+        trust = trust_gate.update(["GOOD"], [False])
+        msgs = build_msgs(
+            [_Tracker("center", stage="start")],
+            [170.0],
+            [False],
+            BICEP_CURL,
+            _Voice(),
+            {"min_rep_time": 1.2},
+            "en",
+            qualities=["GOOD"],
+            trust=trust,
+            cam_feedback=[],
+        )
+        self.assertEqual(msgs[0][0].strip(), t("en", "hold_still_tracking"))
+
+    def test_hold_still_message_has_arabic_translation(self):
+        self.assertNotEqual(t("ar", "hold_still_tracking"), "hold_still_tracking")
+        self.assertNotEqual(t("ar", "hold_still_tracking"), t("en", "hold_still_tracking"))
+
 
 class TestLiveDiagnostics(unittest.TestCase):
     def test_snapshot_reports_fps_dt_jitter_and_quality_fractions(self):
@@ -154,6 +181,75 @@ class TestLiveDiagnostics(unittest.TestCase):
         self.assertAlmostEqual(snap["weak_frac"], 1 / 3, delta=0.01)
         self.assertAlmostEqual(snap["lost_frac"], 1 / 3, delta=0.01)
         self.assertAlmostEqual(snap["recovery_frac"], 1 / 3, delta=0.01)
+
+    def test_diagnostic_rows_are_compact_and_show_segmentation_state(self):
+        gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 3,
+        }, bilateral=True)
+        trust = gate.update(["GOOD", "WEAK"], [False, False], count_qualities=["GOOD", "WEAK"])
+        rows = ui.live_diagnostic_rows(
+            {
+                "fps": 50.0,
+                "dt_ms": 20.0,
+                "jitter_ms": 5.0,
+                "qualities": ("GOOD", "WEAK"),
+                "weak_frac": 0.25,
+                "lost_frac": 0.10,
+                "recovery_frac": 0.20,
+            },
+            trust,
+            raw_quals=("GOOD", "WEAK"),
+            trackers=[_Tracker("left", stage="start", rep_count=2),
+                      _Tracker("right", stage=None, rep_count=1, recovering=True)],
+            seg_enabled=False,
+            lang="en",
+        )
+        joined = " | ".join(rows)
+        self.assertIn(t("en", "diag_seg_off"), joined)
+        self.assertIn("gate c/h L:1/0  R:1/0", joined)
+        self.assertNotIn("raw ", joined)
+
+    def test_diagnostic_rows_show_raw_quality_only_when_it_differs(self):
+        gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 3,
+        }, bilateral=False)
+        trust = gate.update(["GOOD"], [False], count_qualities=["WEAK"])
+        rows = ui.live_diagnostic_rows(
+            {
+                "fps": 60.0,
+                "dt_ms": 16.7,
+                "jitter_ms": 2.0,
+                "qualities": ("GOOD",),
+                "weak_frac": 0.20,
+                "lost_frac": 0.00,
+                "recovery_frac": 0.00,
+            },
+            trust,
+            raw_quals=("WEAK",),
+            trackers=[_Tracker("center", stage="start", rep_count=1)],
+            seg_enabled=True,
+            lang="en",
+        )
+        self.assertTrue(any(row.startswith("raw ") for row in rows))
+
+
+class TestSegmentationOverrides(unittest.TestCase):
+    def test_parse_args_supports_segmentation_overrides(self):
+        from bicep_curl_counter import parse_args
+
+        self.assertIsNone(parse_args([]).seg_enabled)
+        self.assertTrue(parse_args(["--seg"]).seg_enabled)
+        self.assertFalse(parse_args(["--no-seg"]).seg_enabled)
+
+    def test_cli_override_wins_over_config_default(self):
+        from bicep_curl_counter import resolve_segmentation_enabled
+
+        self.assertTrue(resolve_segmentation_enabled({"segmentation_enabled": False}, True))
+        self.assertFalse(resolve_segmentation_enabled({"segmentation_enabled": True}, False))
+        self.assertTrue(resolve_segmentation_enabled({"segmentation_enabled": True}, None))
+        self.assertFalse(resolve_segmentation_enabled({"segmentation_enabled": False}, None))
 
 
 class TestUiSuppression(unittest.TestCase):

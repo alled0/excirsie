@@ -36,6 +36,7 @@ MESSAGES = {
         "get_ready":        "GET READY",
         "go":               "Go!",
         "set_label":        "SET {n}",
+        "ready_label":      "READY",
         "warmup_badge":     "WARM-UP",
         "too_fast":         "TOO FAST",
         "tempo_label":      "TEMPO",
@@ -92,6 +93,9 @@ MESSAGES = {
         "cam_turn_right":     "Turn slightly right to face camera",
         "cam_poor_vis":       "Poor visibility — improve lighting",
         "joint_hidden":       "Key joint not visible — extend arm into frame",
+        "hold_still_tracking": "Hold still for stable tracking",
+        "diag_seg_on":        "Seg on",
+        "diag_seg_off":       "Seg off",
     },
     "ar": {
         "app_title":        "تحرك — لياقة بالذكاء الاصطناعي",
@@ -111,6 +115,7 @@ MESSAGES = {
         "get_ready":        "استعد",
         "go":               "ابدأ!",
         "set_label":        "المجموعة {n}",
+        "ready_label":      "جاهز",
         "warmup_badge":     "إحماء",
         "too_fast":         "سريع جداً",
         "tempo_label":      "الإيقاع",
@@ -167,6 +172,9 @@ MESSAGES = {
         "cam_turn_right":     "استدر قليلاً لليمين",
         "cam_poor_vis":       "الرؤية ضعيفة — حسّن الإضاءة",
         "joint_hidden":       "مفصل رئيسي مخفي — أظهر ذراعك في الإطار",
+        "hold_still_tracking": "اثبت قليلاً ليثبت التتبع",
+        "diag_seg_on":        "العزل: تشغيل",
+        "diag_seg_off":       "العزل: إيقاف",
     },
 }
 
@@ -198,7 +206,8 @@ def _load_font(font_path: str, size: int):
 
 def put_text(img, text: str, pos: tuple, scale: float = 0.8,
              color=(255, 255, 255), thickness: int = 2,
-             lang: str = "en", font_path: str = ""):
+             lang: str = "en", font_path: str = "",
+             align: str = "left"):
     """
     Renders text onto img at pos. Uses PIL for Arabic, OpenCV for English.
     """
@@ -209,14 +218,25 @@ def put_text(img, text: str, pos: tuple, scale: float = 0.8,
         draw     = ImageDraw.Draw(pil_img)
         font_sz  = max(12, int(scale * 28))
         font     = _load_font(font_path, font_sz)
-        # Right-align Arabic from pos
         bbox     = draw.textbbox((0, 0), bidi_text, font=font)
         tw       = bbox[2] - bbox[0]
-        x        = max(0, pos[0] - tw)
+        if align == "center":
+            x = max(0, pos[0] - tw // 2)
+        elif align == "right":
+            x = max(0, pos[0] - tw)
+        else:
+            x = max(0, pos[0])
         draw.text((x, pos[1] - font_sz), bidi_text, font=font,
                   fill=(color[2], color[1], color[0]))
         result = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         img[:] = result
     else:
-        cv2.putText(img, text, pos, cv2.FONT_HERSHEY_DUPLEX,
+        (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, thickness)
+        if align == "center":
+            x = pos[0] - tw // 2
+        elif align == "right":
+            x = pos[0] - tw
+        else:
+            x = pos[0]
+        cv2.putText(img, text, (x, pos[1]), cv2.FONT_HERSHEY_DUPLEX,
                     scale, color, thickness, cv2.LINE_AA)

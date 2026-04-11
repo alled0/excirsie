@@ -25,7 +25,7 @@
     "weight_min_kg": 0.0,
     "weight_max_kg": 200.0,
     "db_path": "~/.taharrak/sessions.db",
-    "arabic_font_path": "assets/NotoNaskhArabic-Regular.ttf",
+    "arabic_font_path": "assets/Noto_Naskh_Arabic/static/NotoNaskhArabic-Regular.ttf",
     "default_language": "en",
     "warmup_mode": true,
     "landmark_smooth_window": 7,

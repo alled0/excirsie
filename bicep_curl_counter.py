@@ -69,7 +69,7 @@ def load_config(path="config.json") -> dict:
         "overload_step_kg": 2.5, "weight_step_kg": 2.5,
         "weight_min_kg": 0.0, "weight_max_kg": 200.0,
         "db_path": "~/.taharrak/sessions.db",
-        "arabic_font_path": "assets/NotoNaskhArabic-Regular.ttf",
+        "arabic_font_path": "assets/Noto_Naskh_Arabic/static/NotoNaskhArabic-Regular.ttf",
         "default_language": "en",
         "warmup_mode": True,
         "landmark_smooth_window": 7,
@@ -84,16 +84,37 @@ def load_config(path="config.json") -> dict:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def parse_args():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Taharrak — AI Fitness Trainer")
     ap.add_argument("--camera",    type=int, default=0)
     ap.add_argument("--reps",      type=int, default=None)
     ap.add_argument("--no-voice",  action="store_true")
     ap.add_argument("--no-mirror", action="store_true")
-    ap.add_argument("--no-seg",    action="store_true")
+    seg_group = ap.add_mutually_exclusive_group()
+    seg_group.add_argument("--seg", dest="seg_enabled", action="store_true")
+    seg_group.add_argument("--no-seg", dest="seg_enabled", action="store_false")
+    ap.set_defaults(seg_enabled=None)
     ap.add_argument("--rest",      type=int, default=None)
     ap.add_argument("--lang",      type=str, default=None, choices=["en", "ar"])
-    return ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def resolve_segmentation_enabled(cfg: dict, cli_value: bool | None) -> bool:
+    if cli_value is None:
+        return bool(cfg.get("segmentation_enabled", True))
+    return bool(cli_value)
+
+
+_KEY_UP = (82, 2490368)
+_KEY_DOWN = (84, 2621440)
+_KEY_ENTER = (13, 10)
+
+
+def key_matches(key: int, *codes: int) -> bool:
+    if key < 0:
+        return False
+    low = key & 0xFF
+    return key in codes or low in codes
 
 
 # ── Set helpers ───────────────────────────────────────────────────────────────
@@ -119,7 +140,7 @@ def main():
     if args.reps      is not None: cfg["target_reps"]    = args.reps
     if args.no_voice:               cfg["voice_enabled"]  = False
     if args.no_mirror:              cfg["mirror_mode"]    = False
-    if args.no_seg:                 cfg["segmentation_enabled"] = False
+    cfg["segmentation_enabled"] = resolve_segmentation_enabled(cfg, args.seg_enabled)
     if args.rest      is not None: cfg["rest_duration"]   = args.rest
 
     lang = args.lang or cfg.get("default_language", "en")
@@ -200,6 +221,7 @@ def main():
                 break
 
             h, w = frame.shape[:2]
+            ui.set_text_context(lang, cfg.get("arabic_font_path", ""))
 
             # ── Pose detection ────────────────────────────────────────
             mp_img = mp.Image(
@@ -398,7 +420,8 @@ def main():
                         comparison_allowed=trust.bilateral_compare_allowed)
                     if show_diag and trust is not None:
                         ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust,
-                                                 raw_quals=raw_quals, trackers=trackers)
+                                                 raw_quals=raw_quals, trackers=trackers,
+                                                 seg_enabled=seg_enabled, lang=lang)
                 else:
                     ui.screen_workout_single(
                         display, trackers[0], angles[0], swings[0],
@@ -409,7 +432,8 @@ def main():
                                        trackers[0]._in_rep))
                     if show_diag and trust is not None:
                         ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust,
-                                                 raw_quals=raw_quals, trackers=trackers)
+                                                 raw_quals=raw_quals, trackers=trackers,
+                                                 seg_enabled=seg_enabled, lang=lang)
 
             elif state == "REST":
                 elapsed   = time.time() - rest_start
@@ -445,7 +469,7 @@ def main():
             # KEY HANDLING
             # ─────────────────────────────────────────────────────────
 
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKeyEx(1)
 
             # Global toggles (any state)
             if key == ord("l"):
@@ -474,11 +498,11 @@ def main():
 
             elif state == "WEIGHT_INPUT":
                 step = cfg.get("weight_step_kg", 2.5)
-                if key in (82, ord("+")):
+                if key_matches(key, *_KEY_UP, ord("+")):
                     weight_kg = min(weight_kg + step, cfg.get("weight_max_kg", 200))
-                elif key in (84, ord("-")):
+                elif key_matches(key, *_KEY_DOWN, ord("-")):
                     weight_kg = max(weight_kg - step, cfg.get("weight_min_kg", 0))
-                elif key in (ord(" "), 13):   # SPACE or ENTER — confirm weight
+                elif key_matches(key, ord(" "), *_KEY_ENTER):   # SPACE or ENTER — confirm weight
                     trackers = (
                         [RepTracker("left", exercise, cfg),
                          RepTracker("right", exercise, cfg)]
@@ -543,9 +567,9 @@ def main():
             elif state == "HISTORY":
                 if key in (27, 8, ord("h")):
                     state = "EXERCISE_SELECT"
-                elif key == 82:
+                elif key_matches(key, *_KEY_UP):
                     history_scroll = max(0, history_scroll - 1)
-                elif key == 84:
+                elif key_matches(key, *_KEY_DOWN):
                     history_scroll = min(max(0, len(history_rows) - 1),
                                          history_scroll + 1)
 

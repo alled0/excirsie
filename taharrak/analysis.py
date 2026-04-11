@@ -147,7 +147,7 @@ def build_setup_msgs(qualities: list[str], cam_feedback: list[str],
     if any(q == "WEAK" for q in qualities):
         return [(f"  {t(lang, 'cam_poor_vis')}", "warning")]
     if trust and trust.render_allowed and not trust.coaching_allowed:
-        return [("  Hold still for stable tracking", "ok")]
+        return [(f"  {t(lang, 'hold_still_tracking')}", "ok")]
     return msgs
 
 

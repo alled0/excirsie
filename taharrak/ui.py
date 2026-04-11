@@ -25,6 +25,9 @@ R_COL  = (255, 200,   0)
 # Skeleton connections drawn on every screen that shows the body
 SKELETON = [(11,12),(11,13),(13,15),(12,14),(14,16)]
 
+_TEXT_LANG = "en"
+_TEXT_FONT_PATH = ""
+
 
 # ── Primitives ────────────────────────────────────────────────────────────────
 
@@ -41,14 +44,28 @@ def trect(img, x1, y1, x2, y2, color=DARK, alpha=0.72, border=True):
         cv2.rectangle(img, (x1, y1), (x2, y2), (75, 75, 75), 1)
 
 
-def put(img, text, pos, scale=0.8, color=WHITE, thickness=2):
-    cv2.putText(img, text, pos, cv2.FONT_HERSHEY_DUPLEX,
-                scale, color, thickness, cv2.LINE_AA)
+def set_text_context(lang: str = "en", font_path: str = "") -> None:
+    global _TEXT_LANG, _TEXT_FONT_PATH
+    _TEXT_LANG = lang
+    _TEXT_FONT_PATH = font_path
 
 
-def center_put(img, text, y, scale=1.0, color=WHITE, thickness=2):
-    (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, thickness)
-    put(img, text, ((img.shape[1] - tw) // 2, y), scale, color, thickness)
+def put(img, text, pos, scale=0.8, color=WHITE, thickness=2,
+        lang=None, font_path=None, align="left"):
+    put_text(
+        img, text, pos, scale, color, thickness,
+        _TEXT_LANG if lang is None else lang,
+        _TEXT_FONT_PATH if font_path is None else font_path,
+        align=align,
+    )
+
+
+def center_put(img, text, y, scale=1.0, color=WHITE, thickness=2,
+               lang=None, font_path=None):
+    put(
+        img, text, (img.shape[1] // 2, y), scale, color, thickness,
+        lang=lang, font_path=font_path, align="center"
+    )
 
 
 def hline(img, y, width=620):
@@ -314,7 +331,7 @@ def screen_workout_bilateral(frame, left, right,
 
         stage_txt = (exercise.stage_labels[1] if tracker.stage == "end"
                      else exercise.stage_labels[0] if tracker.stage == "start"
-                     else "READY")
+                     else t(lang, "ready_label"))
         stage_col = GREEN if tracker.stage == "end" else (ORANGE if tracker.stage == "start" else WHITE)
         put(frame, stage_txt, (px + 12, 162), 0.80, stage_col, 2)
 
@@ -405,7 +422,7 @@ def screen_workout_single(frame, tracker, angle, swinging,
 
     stage_txt = (exercise.stage_labels[1] if tracker.stage == "end"
                  else exercise.stage_labels[0] if tracker.stage == "start"
-                 else "READY")
+                 else t(lang, "ready_label"))
     stage_col = GREEN if tracker.stage == "end" else (ORANGE if tracker.stage == "start" else WHITE)
     put(frame, stage_txt, (px + 14, 270), 0.85, stage_col, 2)
 
@@ -641,35 +658,67 @@ def _feedback_strip(frame, msgs: list, h: int):
         put(frame, txt, (12, h - ph + 36 + i * 46), 0.80, severity_color(severity), 2)
 
 
+def _diag_side_label(i: int) -> str:
+    return ["L", "R", "C"][i] if i < 3 else f"S{i}"
+
+
+def live_diagnostic_rows(diag: dict, trust,
+                         raw_quals: list[str] | tuple[str, ...] = (),
+                         trackers: list | None = None,
+                         seg_enabled: bool | None = None,
+                         lang: str = "en") -> list[str]:
+    qualities = tuple(diag.get("qualities", ()))
+    rows = [
+        f"FPS {diag.get('fps', 0):>5.1f}  dt {diag.get('dt_ms', 0):>5.1f} ms",
+        f"jit {diag.get('jitter_ms', 0):>5.1f} ms  "
+        f"{t(lang, 'diag_seg_on' if seg_enabled else 'diag_seg_off') if seg_enabled is not None else ''}".rstrip(),
+    ]
+    if qualities:
+        rows.append("Q   " + "  ".join(
+            f"{_diag_side_label(i)}:{q}" for i, q in enumerate(qualities)
+        ))
+    if raw_quals:
+        raw_quals = tuple(raw_quals)
+        if raw_quals != qualities[:len(raw_quals)]:
+            rows.append("raw " + "  ".join(
+                f"{_diag_side_label(i)}:{q}" for i, q in enumerate(raw_quals)
+            ))
+    if trust is not None:
+        gate_bits = []
+        for i in range(len(trust.counting_sides)):
+            gate_bits.append(
+                f"{_diag_side_label(i)}:{int(trust.counting_sides[i])}/{int(trust.coaching_sides[i])}"
+            )
+        if gate_bits:
+            rows.append("gate c/h " + "  ".join(gate_bits))
+    rows.append(
+        f"rec {diag.get('recovery_frac', 0):.2f}  weak {diag.get('weak_frac', 0):.2f}  "
+        f"lost {diag.get('lost_frac', 0):.2f}"
+    )
+    if trackers:
+        for i, tr in enumerate(trackers):
+            rows.append(
+                f"{_diag_side_label(i)} st:{tr.stage or '-'} rep:{tr.rep_count} "
+                f"rec:{int(tr._recovering)}"
+            )
+    return rows
+
+
 def draw_live_diagnostics(frame, diag: dict, trust,
                           raw_quals: list[str] | tuple[str, ...] = (),
-                          trackers: list | None = None) -> None:
+                          trackers: list | None = None,
+                          seg_enabled: bool | None = None,
+                          lang: str = "en") -> None:
     if not diag:
         return
     h, w = frame.shape[:2]
-    panel_w = 280
-    row_count = 7 + (len(trackers) if trackers else 0)
+    panel_w = 312
+    rows = live_diagnostic_rows(
+        diag, trust, raw_quals=raw_quals, trackers=trackers,
+        seg_enabled=seg_enabled, lang=lang
+    )
+    row_count = len(rows)
     panel_h = 22 + row_count * 20
     trect(frame, w - panel_w - 12, 12, w - 12, 12 + panel_h, (6, 6, 18), 0.88)
-    rows = [
-        f"FPS {diag.get('fps', 0):>5.1f}",
-        f"dt  {diag.get('dt_ms', 0):>5.1f} ms",
-        f"jit {diag.get('jitter_ms', 0):>5.1f} ms",
-        f"Q   {' / '.join(diag.get('qualities', ()))}",
-        f"raw {' / '.join(raw_quals)}",
-        f"weak {diag.get('weak_frac', 0):.2f}  lost {diag.get('lost_frac', 0):.2f}",
-        f"recovery {diag.get('recovery_frac', 0):.2f}",
-        f"trust r/c/h {int(trust.render_allowed)}/{int(trust.counting_allowed)}/{int(trust.coaching_allowed)}",
-    ]
-    if trackers:
-        labels = ["L", "R", "C"]
-        for i, tr in enumerate(trackers):
-            side = labels[i] if i < len(labels) else f"S{i}"
-            count_ok = int(i < len(trust.counting_sides) and trust.counting_sides[i])
-            coach_ok = int(i < len(trust.coaching_sides) and trust.coaching_sides[i])
-            rows.append(
-                f"{side} c/h {count_ok}/{coach_ok} st:{tr.stage or '-'} rep:{tr.rep_count} "
-                f"rec:{int(tr._recovering)} g:{tr._consecutive_good} l:{tr._consecutive_lost}"
-            )
     for i, text in enumerate(rows):
         put(frame, text, (w - panel_w, 38 + i * 20), 0.54, WHITE, 1)

@@ -859,3 +859,60 @@ Result:
 | `taharrak/analysis.py` | Added trust-aware setup guidance fallback and coaching suppression under weak trust |
 | `taharrak/ui.py` | Hid unstable angle/tempo values; gated bilateral comparison UI; added diagnostics overlay |
 | `tests/test_live_trust.py` | Added focused tests for trust transitions, setup guidance, diagnostics math, comparison suppression, and UI value hiding |
+
+### Phase 1.2 Follow-up — Message Cleanup, Segmentation Path & Live Validation
+
+This follow-up pass kept the Phase 1.2 trust logic intact while cleaning the
+last live UX rough edges before Phase 2.
+
+#### 1. Message-key cleanup
+
+The last remaining live trust/setup string that was still hardcoded
+(`"Hold still for stable tracking"`) was moved into `taharrak/messages.py`
+with EN + AR entries so all live fallback guidance now uses the same message
+catalog pattern as the rest of the app.
+
+The workout HUD fallback `"READY"` label was also moved into the message table
+for consistency.
+
+#### 2. Diagnostics polish
+
+The diagnostics overlay was compacted to focus on the most useful live fields:
+
+- FPS
+- moving-average frame time (`dt`)
+- jitter
+- left/right quality
+- counting/coaching gate state per side
+- recovery / weak / lost fractions
+- per-side stage, rep count, and recovery flag
+
+Raw quality is only shown when it differs from smoothed quality, which keeps
+the default debug view easier to scan.
+
+#### 3. Segmentation evaluation path
+
+Segmentation remains configurable through:
+
+- `config.json` → `segmentation_enabled`
+- CLI override → `--seg`
+- CLI override → `--no-seg`
+
+This makes live A/B comparison straightforward without changing code.  When
+diagnostics are enabled (`D`), the overlay now shows whether segmentation is
+currently on or off.
+
+#### 4. Short live validation checklist
+
+Use this quick checklist before Phase 2 work:
+
+- Good lighting, centered, both arms visible
+  Expected: counting unlocks quickly, coaching appears after stable GOOD tracking, bilateral comparison can appear.
+- One arm partially out of frame
+  Expected: visible side can still count; setup guidance replaces coaching; bilateral comparison stays hidden.
+- Dim lighting
+  Expected: setup guidance prefers visibility / lighting help; coaching stays suppressed until trust recovers.
+- Segmentation on
+  Expected: subject isolation looks cleaner; counting/coaching behaviour should stay the same.
+- Segmentation off
+  Expected: easier baseline for A/B testing; compare stability, latency, and visual quality against segmentation on.
