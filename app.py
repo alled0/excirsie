@@ -12,23 +12,60 @@ import json
 import os
 import threading
 import time
+import types
 import urllib.request
 from collections import Counter
 
-import av
+try:
+    import av
+except ImportError:
+    av = types.SimpleNamespace(VideoFrame=object)
+
 import cv2
-import mediapipe as mp
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
+except ImportError:
+    mp = None
+    mp_python = None
+    vision = None
 import numpy as np
-import streamlit as st
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision
-from streamlit_webrtc import RTCConfiguration, VideoProcessorBase, webrtc_streamer
+try:
+    import streamlit as st
+except ImportError:
+    class _StreamlitShim:
+        @staticmethod
+        def cache_data(func=None, **kwargs):
+            if func is None:
+                def _decorator(inner):
+                    return inner
+                return _decorator
+            return func
+
+        def __getattr__(self, name):
+            raise RuntimeError("Streamlit is required to run app.py")
+
+    st = _StreamlitShim()
+
+try:
+    from streamlit_webrtc import RTCConfiguration, VideoProcessorBase, webrtc_streamer
+except ImportError:
+    class VideoProcessorBase:
+        pass
+
+    class RTCConfiguration(dict):
+        pass
+
+    def webrtc_streamer(*args, **kwargs):
+        raise RuntimeError("streamlit-webrtc is required to run app.py")
 
 from taharrak.analysis import build_msgs, build_post_rep_summary, det_quality_ex
 from taharrak.correction import CorrectionEngine
 from taharrak.exercises import EXERCISES
 from taharrak.messages import t
 from taharrak.tracker import (
+    LiveDiagnostics,
     LiveTrustGate,
     OneEuroLandmarkSmoother,
     RepTracker,
@@ -121,6 +158,115 @@ _QUALITY_BGR: dict = {
     "LOST": ( 60,  60, 220),
 }
 
+_RUNTIME_MODE = "VIDEO"
+
+
+def _require_runtime_deps() -> None:
+    if mp is None or mp_python is None or vision is None:
+        raise RuntimeError("mediapipe is required to run the Streamlit app")
+
+
+def _runtime_settings(exercise_key: str, lang: str,
+                      segmentation_enabled: bool) -> dict:
+    return {
+        "exercise_key": exercise_key,
+        "lang": lang,
+        "segmentation_enabled": bool(segmentation_enabled),
+        "running_mode": _RUNTIME_MODE,
+    }
+
+
+def _restart_required_message(requested: dict, applied: dict | None) -> str | None:
+    if not applied:
+        return None
+    changed = []
+    labels = {
+        "exercise_key": "exercise",
+        "lang": "language",
+        "segmentation_enabled": "segmentation",
+    }
+    for key, label in labels.items():
+        if requested.get(key) != applied.get(key):
+            changed.append(label)
+    if not changed:
+        return None
+    changed_str = ", ".join(changed)
+    return (
+        "Settings changed while the stream is running "
+        f"({changed_str}). Stop and Start again to apply them."
+    )
+
+
+def _next_video_timestamp_ms(last_ms: int | None,
+                             frame_time_s: float | None = None,
+                             monotonic_ns: int | None = None) -> int:
+    if frame_time_s is not None and frame_time_s >= 0:
+        candidate = int(frame_time_s * 1000)
+    else:
+        now_ns = time.monotonic_ns() if monotonic_ns is None else int(monotonic_ns)
+        candidate = now_ns // 1_000_000
+    if last_ms is not None and candidate <= last_ms:
+        return last_ms + 1
+    return candidate
+
+
+def _apply_segmentation(frame: np.ndarray, result, bg_color: tuple[int, int, int]) -> np.ndarray:
+    if not getattr(result, "segmentation_masks", None):
+        return frame
+    mask = result.segmentation_masks[0].numpy_view()
+    mask_u8 = (mask * 255).astype(np.uint8)
+    mask3 = cv2.merge([mask_u8, mask_u8, mask_u8])
+    bg = np.full_like(frame, bg_color, dtype=np.uint8)
+    return cv2.convertScaleAbs(
+        frame.astype(np.float32) * (mask3 / 255.0) +
+        bg.astype(np.float32) * (1.0 - mask3 / 255.0)
+    )
+
+
+def _diagnostic_rows(diag: dict, bilateral: bool) -> list[str]:
+    if not diag:
+        return []
+    trust = diag.get("trust", {})
+    qualities = diag.get("qualities", ())
+    def _side_flag(values, idx):
+        if idx < len(values):
+            return bool(values[idx])
+        return False
+    rows = [
+        f"Mode: {diag.get('mode', '?')} · {'Seg on' if diag.get('segmentation') else 'Seg off'}",
+        f"FPS: {diag.get('fps', 0.0):.1f} · dt: {diag.get('dt_ms', 0.0):.1f} ms · jitter: {diag.get('jitter_ms', 0.0):.1f} ms",
+    ]
+    if bilateral:
+        q_left = qualities[0] if len(qualities) > 0 else "LOST"
+        q_right = qualities[1] if len(qualities) > 1 else "LOST"
+        count_sides = tuple(trust.get("counting_sides", (False, False)))
+        coach_sides = tuple(trust.get("coaching_sides", (False, False)))
+        rows.append(f"Quality: L {q_left} · R {q_right}")
+        rows.append(
+            "Trust: "
+            f"render {'on' if trust.get('render_allowed') else 'off'} · "
+            f"count L {'on' if _side_flag(count_sides, 0) else 'off'} / R {'on' if _side_flag(count_sides, 1) else 'off'} · "
+            f"coach L {'on' if _side_flag(coach_sides, 0) else 'off'} / R {'on' if _side_flag(coach_sides, 1) else 'off'}"
+        )
+    else:
+        q_center = qualities[0] if qualities else "LOST"
+        count_side = _side_flag(tuple(trust.get("counting_sides", ())), 0)
+        coach_side = _side_flag(tuple(trust.get("coaching_sides", ())), 0)
+        rows.append(f"Quality: {q_center}")
+        rows.append(
+            "Trust: "
+            f"render {'on' if trust.get('render_allowed') else 'off'} · "
+            f"count {'on' if count_side else 'off'} · "
+            f"coach {'on' if coach_side else 'off'}"
+        )
+    rows.append(
+        "Recovery: "
+        f"{diag.get('recovery_frac', 0.0):.0%} · "
+        f"weak: {diag.get('weak_frac', 0.0):.0%} · "
+        f"lost: {diag.get('lost_frac', 0.0):.0%}"
+    )
+    return rows
+
 
 # ── Null voice (no TTS in web version) ───────────────────────────────────────
 
@@ -146,6 +292,8 @@ class _SharedState:
         self.form_msgs:   list    = []
         self.last_correction      = None  # RepCorrection | None
         self.session_faults       = Counter()
+        self.diagnostics: dict    = {}
+        self.applied_settings: dict = {}
         self.frames: int          = 0
 
     def push(
@@ -156,6 +304,8 @@ class _SharedState:
         form_msgs:     list,
         last_correction,
         session_faults: Counter,
+        diagnostics: dict,
+        applied_settings: dict,
         frames: int,
     ) -> None:
         with self._lock:
@@ -165,6 +315,8 @@ class _SharedState:
             self.form_msgs       = list(form_msgs)
             self.last_correction = last_correction
             self.session_faults  = Counter(session_faults)
+            self.diagnostics     = dict(diagnostics)
+            self.applied_settings = dict(applied_settings)
             self.frames          = frames
 
     def snapshot(self) -> dict:
@@ -176,6 +328,8 @@ class _SharedState:
                 "form_msgs":       list(self.form_msgs),
                 "last_correction": self.last_correction,
                 "session_faults":  Counter(self.session_faults),
+                "diagnostics":     dict(self.diagnostics),
+                "applied_settings": dict(self.applied_settings),
                 "frames":          self.frames,
             }
 
@@ -191,27 +345,33 @@ class TaharrrakProcessor(VideoProcessorBase):
     One instance lives for the entire stream session.
     """
 
-    def __init__(self, exercise_key: str, lang: str, cfg: dict) -> None:
+    def __init__(self, exercise_key: str, lang: str, cfg: dict,
+                 segmentation_enabled: bool) -> None:
+        _require_runtime_deps()
         self.exercise_key = exercise_key
         self.lang         = lang
         self.cfg          = cfg
         self.shared       = _SharedState()
         self._voice       = _NullVoice()
+        self.segmentation_enabled = bool(segmentation_enabled)
+        self.running_mode = _RUNTIME_MODE
+        self._seg_bg = tuple(cfg.get("segmentation_bg_color", [10, 10, 25]))
+        self._applied_settings = _runtime_settings(
+            exercise_key, lang, self.segmentation_enabled
+        )
 
         exercise       = EXERCISES[exercise_key]
         self._exercise = exercise
 
-        # MediaPipe — IMAGE mode: each frame processed independently.
-        # No timestamp tracking, but simple and compatible with any frame rate.
         base_opts = mp_python.BaseOptions(model_asset_path=_MODEL_PATH)
         opts = vision.PoseLandmarkerOptions(
             base_options=base_opts,
-            running_mode=vision.RunningMode.IMAGE,
+            running_mode=vision.RunningMode.VIDEO,
             num_poses=1,
             min_pose_detection_confidence=0.48,
             min_pose_presence_confidence=0.48,
             min_tracking_confidence=0.48,
-            output_segmentation_masks=False,
+            output_segmentation_masks=self.segmentation_enabled,
         )
         self._landmarker = vision.PoseLandmarker.create_from_options(opts)
 
@@ -236,6 +396,7 @@ class TaharrrakProcessor(VideoProcessorBase):
         # Trust gate and tracking guard
         self._trust_gate = LiveTrustGate(cfg, exercise.bilateral)
         self._guard      = TrackingGuard(cfg)
+        self._diagnostics = LiveDiagnostics()
 
         # Correction engine
         self._engine = CorrectionEngine()
@@ -247,6 +408,8 @@ class TaharrrakProcessor(VideoProcessorBase):
         self._session_faults: Counter = Counter()
 
         self._frame_idx: int = 0
+        self._last_recv_t: float | None = None
+        self._last_video_ts_ms: int | None = None
 
         # Cache pose connections once
         self._connections = _pose_connections()
@@ -256,11 +419,21 @@ class TaharrrakProcessor(VideoProcessorBase):
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         h, w = img.shape[:2]
+        recv_t = time.monotonic()
+        dt = recv_t - self._last_recv_t if self._last_recv_t is not None else 1.0 / max(float(self.cfg.get("camera_fps", 30)), 1.0)
+        self._last_recv_t = recv_t
 
         # Detect pose
         rgb    = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self._landmarker.detect(mp_img)
+        ts_ms = _next_video_timestamp_ms(
+            self._last_video_ts_ms,
+            frame_time_s=getattr(frame, "time", None),
+        )
+        self._last_video_ts_ms = ts_ms
+        result = self._landmarker.detect_for_video(mp_img, ts_ms)
+        if self.segmentation_enabled:
+            img = _apply_segmentation(img, result, self._seg_bg)
 
         lm_smooth = (
             self._smoother.smooth(result.pose_landmarks[0])
@@ -381,6 +554,8 @@ class TaharrrakProcessor(VideoProcessorBase):
                 count_qualities=["LOST"] * len(trackers),
             )
 
+        self._diagnostics.update(dt, quals, [tr._recovering for tr in trackers])
+
         # Post-rep flash overrides live coaching for score_flash_duration seconds
         _now   = time.time()
         _flash = next(
@@ -397,7 +572,7 @@ class TaharrrakProcessor(VideoProcessorBase):
         self._draw(img, w, h, lm_smooth, exercise, trackers, quals, msgs)
 
         self._frame_idx += 1
-        self._push_state(trackers, quals, msgs, exercise)
+        self._push_state(trackers, quals, msgs, exercise, trust)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -478,7 +653,7 @@ class TaharrrakProcessor(VideoProcessorBase):
 
     # ── State update ──────────────────────────────────────────────────────────
 
-    def _push_state(self, trackers, quals, msgs, exercise) -> None:
+    def _push_state(self, trackers, quals, msgs, exercise, trust) -> None:
         rep_counts: dict = {}
         avg_scores: dict = {}
         qualities:  dict = {}
@@ -501,10 +676,24 @@ class TaharrrakProcessor(VideoProcessorBase):
              if tr.last_correction and tr.last_correction.main_error),
             None,
         )
+        diag = self._diagnostics.snapshot()
+        diag.update({
+            "mode": self.running_mode,
+            "segmentation": self.segmentation_enabled,
+            "trust": {
+                "render_allowed": bool(trust.render_allowed) if trust else False,
+                "counting_allowed": bool(trust.counting_allowed) if trust else False,
+                "coaching_allowed": bool(trust.coaching_allowed) if trust else False,
+                "bilateral_compare_allowed": bool(trust.bilateral_compare_allowed) if trust else False,
+                "counting_sides": tuple(getattr(trust, "counting_sides", ())),
+                "coaching_sides": tuple(getattr(trust, "coaching_sides", ())),
+            },
+        })
 
         self.shared.push(
             rep_counts, avg_scores, qualities, msgs,
-            last_correction, self._session_faults, self._frame_idx,
+            last_correction, self._session_faults,
+            diag, self._applied_settings, self._frame_idx,
         )
 
 
@@ -520,6 +709,7 @@ def _load_cfg() -> dict:
 
 
 def _ensure_model() -> None:
+    _require_runtime_deps()
     if not os.path.exists(_MODEL_PATH):
         with st.spinner("Downloading MediaPipe pose model (~6 MB)…"):
             urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
@@ -556,6 +746,18 @@ def main() -> None:
         lang_label = st.radio("Language", ["English", "عربي"], horizontal=True)
         lang       = "en" if lang_label == "English" else "ar"
 
+        seg_default = bool(cfg.get("segmentation_enabled", True))
+        segmentation_enabled = st.toggle(
+            "Segmentation",
+            value=seg_default,
+            help="Applies the desktop-style background mask. Restart the stream to apply changes.",
+        )
+        show_diagnostics = st.toggle(
+            "Diagnostics",
+            value=False,
+            help="Show FPS, frame timing, quality, trust, and recovery details.",
+        )
+
         st.divider()
         st.markdown(
             "**Setup tips**\n"
@@ -579,7 +781,7 @@ def main() -> None:
     # Factory closure — captures exercise_key, lang, cfg at call time.
     # streamlit-webrtc calls this once when the user clicks Start.
     def _factory() -> TaharrrakProcessor:
-        return TaharrrakProcessor(exercise_key, lang, cfg)
+        return TaharrrakProcessor(exercise_key, lang, cfg, segmentation_enabled)
 
     ctx = webrtc_streamer(
         key="taharrak",
@@ -589,23 +791,21 @@ def main() -> None:
         async_processing=True,
     )
 
-    # Exercise changed while streaming — warn the user
-    if (
-        ctx.video_processor is not None
-        and ctx.video_processor.exercise_key != exercise_key
-    ):
-        st.warning(
-            "Exercise changed while the stream is running. "
-            "**Stop** and **Start** again to apply the new selection.",
-            icon="⚠️",
+    requested_settings = _runtime_settings(exercise_key, lang, segmentation_enabled)
+    if ctx.video_processor is not None:
+        warning = _restart_required_message(
+            requested_settings,
+            getattr(ctx.video_processor, "_applied_settings", None),
         )
+        if warning:
+            st.warning(warning, icon="⚠️")
 
     st.divider()
 
     # ── Stats panel ───────────────────────────────────────────────────
     if ctx.video_processor:
         snap = ctx.video_processor.shared.snapshot()
-        _render_stats(snap, exercise, lang)
+        _render_stats(snap, exercise, lang, show_diagnostics)
     else:
         st.info(
             "Click **Start** in the webcam panel, then allow camera access.  "
@@ -614,7 +814,7 @@ def main() -> None:
         )
 
 
-def _render_stats(snap: dict, exercise, lang: str) -> None:
+def _render_stats(snap: dict, exercise, lang: str, show_diagnostics: bool = False) -> None:
     """Render rep counters, live coaching cue, correction detail, and summary."""
     rep_counts  = snap["rep_counts"]
     avg_scores  = snap["avg_scores"]
@@ -622,6 +822,7 @@ def _render_stats(snap: dict, exercise, lang: str) -> None:
     form_msgs   = snap["form_msgs"]
     last_corr   = snap["last_correction"]
     sess_faults = snap["session_faults"]
+    diagnostics = snap.get("diagnostics", {})
 
     # ── Metric row ────────────────────────────────────────────────────
     if exercise.bilateral:
@@ -665,7 +866,7 @@ def _render_stats(snap: dict, exercise, lang: str) -> None:
 
     # ── Last rep correction (Phase 3) ─────────────────────────────────
     if last_corr and last_corr.main_error:
-        with st.expander("Last Rep Correction", expanded=True):
+        with st.expander("Last Rep Correction", expanded=False):
             lc1, lc2 = st.columns(2)
             with lc1:
                 fault_label = last_corr.main_error.replace("_", " ").title()
@@ -709,6 +910,11 @@ def _render_stats(snap: dict, exercise, lang: str) -> None:
                 st.caption("**Fault breakdown (frame counts this session):**")
                 for fault, count in sess_faults.most_common(5):
                     st.caption(f"  • {fault.replace('_', ' ')}: {count} frames")
+
+    if show_diagnostics and diagnostics:
+        with st.expander("Diagnostics", expanded=True):
+            for row in _diagnostic_rows(diagnostics, exercise.bilateral):
+                st.caption(row)
 
 
 if __name__ == "__main__":

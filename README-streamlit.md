@@ -1,89 +1,125 @@
 # Taharrak — Streamlit Web App
 
-Real-time AI fitness coach running entirely in the browser.  
-No installation required for end users — just open the URL and allow camera access.
+Thin browser wrapper around the main Taharrak runtime.
+
+It reuses the same core exercise registry, rep trackers, trust gate, tracking
+guard, correction engine, and feedback selection used by the desktop app.
 
 ---
 
 ## Run locally
 
 ```bash
-# 1. Install web dependencies (one-time)
 pip install -r requirements-streamlit.txt
-
-# 2. Launch
 streamlit run app.py
 ```
 
-The app opens at `http://localhost:8501`.  
-On first run it downloads the MediaPipe pose model (~6 MB) automatically.
+The app opens at `http://localhost:8501`.
+
+On first run it downloads the MediaPipe pose model (`pose_landmarker_lite.task`)
+automatically if it is not already present.
 
 ---
 
-## Deploy free on Streamlit Cloud
+## What is included
 
-1. **Push this repo to GitHub** (public or private).
-
-2. Go to **[share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub.
-
-3. Click **New app** and fill in:
-   | Field | Value |
-   |---|---|
-   | Repository | `your-username/your-repo` |
-   | Branch | `main` |
-   | Main file path | `app.py` |
-
-4. Under **Advanced settings → Python packages**, point to `requirements-streamlit.txt`  
-   (or rename it to `requirements.txt` if you're deploying the web version only).
-
-5. Click **Deploy**.  Streamlit Cloud handles the build and gives you a public URL.
-
-> **Note:** Streamlit Cloud runs on Linux servers.  
-> `opencv-python-headless` is required instead of `opencv-python` in that environment.
+- real webcam streaming through `streamlit-webrtc`
+- the same `EXERCISES` registry used by the desktop app
+- `RepTracker` counting and scoring
+- `LiveTrustGate` and `TrackingGuard`
+- `CorrectionEngine` post-rep summaries
+- `build_msgs()` one-cue coaching
+- optional segmentation toggle
+- optional diagnostics panel
 
 ---
 
-## What the web version omits (vs. the CLI app)
+## What is intentionally omitted
 
-| Feature | CLI (`bicep_curl_counter.py`) | Web (`app.py`) |
-|---|---|---|
-| TTS voice feedback | ✓ | — (browser audio isn't reliable cross-platform) |
-| SQLite session history | ✓ | — |
-| CSV export | ✓ | — |
-| Arabic PIL rendering | ✓ | — (text appears as Latin fallback if `arabic-reshaper` absent) |
-| Background segmentation | ✓ | — (saves CPU; can be added later) |
-| State machine (sets / rest / summary) | ✓ | — (simplified: select → stream → stop) |
+- desktop OpenCV state machine screens (exercise select, weight input, rest screen)
+- TTS voice playback
+- SQLite history and CSV export
+- the full desktop HUD layout
 
-All **form detection, rep counting, CorrectionEngine, and one-cue coaching** are identical  
-to the CLI version — same `taharrak/` package, same `config.json` thresholds.
+The web version is intentionally simpler: select an exercise, start the stream,
+watch the live cue, and review the running summary.
 
 ---
 
-## WebRTC / NAT notes
+## Using the controls
 
-The app uses three public Google STUN servers for NAT traversal:
+Sidebar controls:
 
-```
-stun:stun.l.google.com:19302
-stun:stun1.l.google.com:19302
-stun:stun2.l.google.com:19302
-```
+- **Exercise**: pick the movement to track
+- **Language**: English or Arabic
+- **Segmentation**: apply the same background-mask effect used by the desktop app
+- **Diagnostics**: show FPS, frame timing, quality, trust, and recovery details
 
-STUN works for most home and office networks.  
-If the webcam feed fails to connect (common behind symmetric NAT or strict firewalls),  
-you need a TURN relay server.  Add it to `_RTC_CONFIG` in `app.py`:
+Important:
 
-```python
-_RTC_CONFIG = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {
-            "urls":       ["turn:your-turn-server:3478"],
-            "username":   "user",
-            "credential": "password",
-        },
-    ]
-})
-```
+- If you change **exercise**, **language**, or **segmentation** while the stream
+  is running, the app will warn you to **Stop** and **Start** again.
+- Diagnostics are UI-only and can be toggled without restarting.
 
-Free TURN services: [Metered](https://www.metered.ca/tools/openrelay/) · [Xirsys](https://xirsys.com) (free tier).
+---
+
+## Diagnostics and segmentation
+
+### Segmentation
+
+Segmentation is configurable from the Streamlit sidebar and is passed directly
+into the MediaPipe landmarker at processor startup.
+
+- Default: follows `config.json` → `segmentation_enabled`
+- Change requires stream restart
+
+### Diagnostics
+
+When enabled, the diagnostics panel shows:
+
+- current FPS
+- moving-average frame time (`dt`)
+- frame-time jitter
+- current quality state
+- trust state (`render`, `count`, `coach`)
+- recovery / weak / lost fractions
+- segmentation state and runtime mode
+
+Diagnostics are hidden by default so the normal UI stays clean.
+
+---
+
+## MediaPipe runtime mode
+
+The Streamlit app uses **MediaPipe VIDEO mode** with strictly monotonic
+timestamps.
+
+Why:
+
+- it better matches the desktop Taharrak runtime
+- it preserves tracker continuity frame-to-frame
+- it avoids treating the webcam stream as isolated still images
+
+Implementation note:
+
+- `app.py` derives a monotonic millisecond timestamp for each frame
+- if the incoming frame timestamp stalls or repeats, it is bumped forward by 1 ms
+  so MediaPipe still receives a valid increasing sequence
+
+---
+
+## Validation tips
+
+- use good lighting and keep the full working side in frame
+- for bilateral exercises, show both arms clearly before expecting comparison cues
+- try segmentation on and off on the same setup to compare visual quality and latency
+- turn diagnostics on if counts or coaching feel delayed or inconsistent
+
+---
+
+## WebRTC / NAT note
+
+The app uses public Google STUN servers by default.
+
+If the webcam feed cannot connect behind a strict firewall or symmetric NAT,
+you may need to add a TURN server in `_RTC_CONFIG` inside [app.py](./app.py).
