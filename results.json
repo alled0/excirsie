@@ -5,26 +5,17 @@
   "frames_total": 407,
   "frames_detected": 407,
   "dropout_rate": 0.0,
-  "angle_delta_mean": 2.877,
-  "angle_delta_p95": 11.698,
+  "angle_delta_mean": 2.996,
+  "angle_delta_p95": 11.268,
   "reps_total": 4,
-  "fps_mean": 53.3,
+  "fps_mean": 51.9,
   "mean_reliability": 0.9203,
   "recovery_rate": 0.0,
   "unknown_rate": 0.0025,
   "aborted_reps": 0,
-  "rejected_reps": 1,
+  "rejected_reps": 0,
   "signal_quality": 0.9203,
-  "event_log": [
-    {
-      "timestamp": "2026-04-11T22:10:15.113480",
-      "side": "right",
-      "set_num": 1,
-      "category": "below_min_duration",
-      "duration_s": 0.911,
-      "min_rep_time": 1.2
-    }
-  ],
+  "event_log": [],
   "reps_left": 2,
   "reps_right": 2
 }

@@ -33,7 +33,7 @@ class _Tracker:
 class TestLiveTrustGate(unittest.TestCase):
     def test_trust_levels_escalate_with_stable_good_frames(self):
         gate = LiveTrustGate({
-            "trust_count_frames": 2,
+            "trust_count_frames": 1,
             "trust_coach_frames": 4,
             "trust_mismatch_tolerance": 1,
         }, bilateral=True)
@@ -44,7 +44,7 @@ class TestLiveTrustGate(unittest.TestCase):
         s4 = gate.update(["GOOD", "GOOD"], [False, False])
 
         self.assertTrue(s1.render_allowed)
-        self.assertFalse(s1.counting_allowed)
+        self.assertTrue(s1.counting_allowed)
         self.assertFalse(s1.coaching_allowed)
         self.assertTrue(s2.counting_allowed)
         self.assertFalse(s2.coaching_allowed)
@@ -53,7 +53,7 @@ class TestLiveTrustGate(unittest.TestCase):
 
     def test_weak_or_mismatched_sides_disable_counting_and_comparison(self):
         gate = LiveTrustGate({
-            "trust_count_frames": 2,
+            "trust_count_frames": 1,
             "trust_coach_frames": 3,
             "trust_mismatch_tolerance": 1,
         }, bilateral=True)
@@ -63,19 +63,56 @@ class TestLiveTrustGate(unittest.TestCase):
 
         weak = gate.update(["GOOD", "WEAK"], [False, False])
         self.assertTrue(weak.render_allowed)
-        self.assertFalse(weak.counting_allowed)
+        self.assertTrue(weak.counting_allowed)
         self.assertFalse(weak.coaching_allowed)
         self.assertFalse(weak.bilateral_compare_allowed)
+        self.assertTrue(weak.counting_sides[0])
+        self.assertTrue(weak.counting_sides[1])
+        self.assertFalse(weak.coaching_sides[1])
 
     def test_single_side_trust_requires_only_relevant_side(self):
         gate = LiveTrustGate({
-            "trust_count_frames": 2,
+            "trust_count_frames": 1,
             "trust_coach_frames": 3,
         }, bilateral=False)
-        gate.update(["GOOD"], [False])
         state = gate.update(["GOOD"], [False])
         self.assertTrue(state.counting_allowed)
+        self.assertTrue(state.counting_sides[0])
         self.assertFalse(state.coaching_allowed)
+
+    def test_lost_side_blocks_only_that_side_for_counting(self):
+        gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 3,
+        }, bilateral=True)
+        state = gate.update(["GOOD", "LOST"], [False, False])
+        self.assertTrue(state.counting_sides[0])
+        self.assertFalse(state.counting_sides[1])
+        self.assertFalse(state.coaching_allowed)
+        self.assertFalse(state.bilateral_compare_allowed)
+
+    def test_counting_can_unlock_before_smoothed_coaching_quality(self):
+        gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 3,
+        }, bilateral=True)
+        state = gate.update(["LOST", "LOST"], [False, False],
+                            count_qualities=["WEAK", "LOST"])
+        self.assertTrue(state.render_allowed)
+        self.assertTrue(state.counting_allowed)
+        self.assertTrue(state.counting_sides[0])
+        self.assertFalse(state.coaching_allowed)
+        self.assertFalse(state.coaching_sides[0])
+
+    def test_recovery_does_not_deadlock_counting(self):
+        gate = LiveTrustGate({
+            "trust_count_frames": 1,
+            "trust_coach_frames": 3,
+        }, bilateral=False)
+        blocked = gate.update(["GOOD"], [True], count_qualities=["WEAK"])
+        recovered = gate.update(["GOOD"], [False], count_qualities=["WEAK"])
+        self.assertFalse(blocked.counting_allowed)
+        self.assertTrue(recovered.counting_allowed)
 
 
 class TestCoachingFallback(unittest.TestCase):

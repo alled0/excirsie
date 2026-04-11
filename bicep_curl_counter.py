@@ -90,6 +90,7 @@ def parse_args():
     ap.add_argument("--reps",      type=int, default=None)
     ap.add_argument("--no-voice",  action="store_true")
     ap.add_argument("--no-mirror", action="store_true")
+    ap.add_argument("--no-seg",    action="store_true")
     ap.add_argument("--rest",      type=int, default=None)
     ap.add_argument("--lang",      type=str, default=None, choices=["en", "ar"])
     return ap.parse_args()
@@ -118,6 +119,7 @@ def main():
     if args.reps      is not None: cfg["target_reps"]    = args.reps
     if args.no_voice:               cfg["voice_enabled"]  = False
     if args.no_mirror:              cfg["mirror_mode"]    = False
+    if args.no_seg:                 cfg["segmentation_enabled"] = False
     if args.rest      is not None: cfg["rest_duration"]   = args.rest
 
     lang = args.lang or cfg.get("default_language", "en")
@@ -279,9 +281,12 @@ def main():
                 angles = [None]  * len(trackers)
                 swings = [False] * len(trackers)
                 quals  = ["LOST"] * len(trackers)
+                raw_quals = ["LOST"] * len(trackers)
                 warmup = (set_count == 0)
                 cam_feedback = []
-                trust = trust_gate.update(quals, [False] * len(trackers)) if trust_gate else None
+                trust = (trust_gate.update(quals, [False] * len(trackers),
+                                           count_qualities=raw_quals)
+                         if trust_gate else None)
 
                 if lm_smooth:
                     lm    = lm_smooth
@@ -293,16 +298,20 @@ def main():
                         l_q = trackers[0].smooth_quality(l_q_raw)
                         r_q = trackers[1].smooth_quality(r_q_raw)
                         quals = [l_q, r_q]
-                        trust = trust_gate.update(quals, [tr._recovering for tr in trackers])
+                        raw_quals = [l_q_raw, r_q_raw]
+                        trust = trust_gate.update(
+                            quals, [tr._recovering for tr in trackers],
+                            count_qualities=raw_quals
+                        )
                         diagnostics.update(frame_dt, quals, [tr._recovering for tr in trackers])
 
                         if trust.render_allowed:
                             lm_px = ui.lm_to_px(lm, w, h, mirror)
                             ui.draw_skeleton(display, lm_px)
-                        if trust.render_allowed and l_q != "LOST":
+                        if trust.render_allowed and l_q_raw != "LOST":
                             a, b, c = exercise.joints_left
                             ui.draw_arm(display, lm_px, a, b, c, ui.L_COL)
-                            if trust.counting_allowed and l_q == "GOOD":
+                            if trust.counting_sides[0]:
                                 swing_lm = lm[exercise.swing_joint_left]
                                 ang, sw, done, sc = trackers[0].update(
                                     lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
@@ -314,10 +323,10 @@ def main():
                                     score_flash["left"] = (sc, time.time() + cfg["score_flash_duration"])
                                     voice.say(f"{t(lang,'left')} {trackers[0].rep_count}. {sc}", 1.0)
 
-                        if trust.render_allowed and r_q != "LOST":
+                        if trust.render_allowed and r_q_raw != "LOST":
                             a, b, c = exercise.joints_right
                             ui.draw_arm(display, lm_px, a, b, c, ui.R_COL)
-                            if trust.counting_allowed and r_q == "GOOD":
+                            if trust.counting_sides[1]:
                                 swing_lm = lm[exercise.swing_joint_right]
                                 ang, sw, done, sc = trackers[1].update(
                                     lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
@@ -331,16 +340,20 @@ def main():
                     else:
                         r_q = trackers[0].smooth_quality(r_q_raw)
                         quals = [r_q]
-                        trust = trust_gate.update(quals, [trackers[0]._recovering])
+                        raw_quals = [r_q_raw]
+                        trust = trust_gate.update(
+                            quals, [trackers[0]._recovering],
+                            count_qualities=raw_quals
+                        )
                         diagnostics.update(frame_dt, quals, [trackers[0]._recovering])
 
                         if trust.render_allowed:
                             lm_px = ui.lm_to_px(lm, w, h, mirror)
                             ui.draw_skeleton(display, lm_px)
-                        if trust.render_allowed and r_q != "LOST":
+                        if trust.render_allowed and r_q_raw != "LOST":
                             a, b, c = exercise.joints_right
                             ui.draw_arm(display, lm_px, a, b, c, ui.R_COL)
-                            if trust.counting_allowed and r_q == "GOOD":
+                            if trust.counting_sides[0]:
                                 swing_lm = lm[exercise.swing_joint_right]
                                 ang, sw, done, sc = trackers[0].update(
                                     lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
@@ -355,7 +368,11 @@ def main():
                     for tr in trackers:
                         tr.smooth_quality("LOST")
                     quals = ["LOST"] * len(trackers)
-                    trust = trust_gate.update(quals, [tr._recovering for tr in trackers])
+                    raw_quals = quals[:]
+                    trust = trust_gate.update(
+                        quals, [tr._recovering for tr in trackers],
+                        count_qualities=raw_quals
+                    )
                     diagnostics.update(frame_dt, quals, [tr._recovering for tr in trackers])
 
                 if lm_smooth and guard and guard.update(lm_smooth, trackers, exercise):
@@ -376,19 +393,23 @@ def main():
                         quals[0], quals[1], set_count + 1,
                         score_flash, msgs, exercise, cfg, lang,
                         angle_visible=tuple(trust.render_allowed and q == "GOOD" for q in quals),
-                        tempo_visible=tuple(trust.counting_allowed and q == "GOOD" for q in quals),
+                        tempo_visible=tuple(trust.counting_sides[i] and q == "GOOD" and trackers[i]._in_rep
+                                            for i, q in enumerate(quals)),
                         comparison_allowed=trust.bilateral_compare_allowed)
                     if show_diag and trust is not None:
-                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust)
+                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust,
+                                                 raw_quals=raw_quals, trackers=trackers)
                 else:
                     ui.screen_workout_single(
                         display, trackers[0], angles[0], swings[0],
                         quals[0], set_count + 1, score_flash,
                         msgs, exercise, cfg, lang,
                         angle_visible=(trust.render_allowed and quals[0] == "GOOD"),
-                        tempo_visible=(trust.counting_allowed and quals[0] == "GOOD"))
+                        tempo_visible=(trust.counting_sides[0] and quals[0] == "GOOD" and
+                                       trackers[0]._in_rep))
                     if show_diag and trust is not None:
-                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust)
+                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust,
+                                                 raw_quals=raw_quals, trackers=trackers)
 
             elif state == "REST":
                 elapsed   = time.time() - rest_start

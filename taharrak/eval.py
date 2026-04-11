@@ -172,7 +172,8 @@ def replay_video(video_path: str, exercise_key: str,
 
             rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            ts     = int(frame_idx * 1000 / video_fps)
+            frame_time_s = frame_idx / video_fps
+            ts     = int(frame_time_s * 1000)
             result = landmarker.detect_for_video(mp_img, ts)
             frame_idx += 1
 
@@ -204,7 +205,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_left]
                     ang, _, done, _ = trackers[0].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h)
+                        swing_lm, w, h, now=frame_time_s)
                     angle_history[0].append(ang)
                     if prev_angles[0] is not None:
                         angle_deltas[0].append(abs(ang - prev_angles[0]))
@@ -217,7 +218,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_right]
                     ang, _, done, _ = trackers[1].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h)
+                        swing_lm, w, h, now=frame_time_s)
                     angle_history[1].append(ang)
                     if prev_angles[1] is not None:
                         angle_deltas[1].append(abs(ang - prev_angles[1]))
@@ -230,7 +231,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_right]
                     ang, _, done, _ = trackers[0].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h)
+                        swing_lm, w, h, now=frame_time_s)
                     angle_history[0].append(ang)
                     if prev_angles[0] is not None:
                         angle_deltas[0].append(abs(ang - prev_angles[0]))

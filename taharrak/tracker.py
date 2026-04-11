@@ -41,7 +41,10 @@ class LiveTrustState:
     counting_allowed: bool
     coaching_allowed: bool
     bilateral_compare_allowed: bool
+    counting_sides: tuple
+    coaching_sides: tuple
     good_frames: tuple
+    visible_frames: tuple
 
 
 class LiveTrustGate:
@@ -55,29 +58,43 @@ class LiveTrustGate:
 
     def __init__(self, cfg: dict, bilateral: bool):
         self.bilateral = bilateral
-        self._count_frames = int(cfg.get("trust_count_frames", 2))
+        self._count_frames = int(cfg.get("trust_count_frames", 1))
         self._coach_frames = int(cfg.get("trust_coach_frames", 5))
         self._mismatch_tol = int(cfg.get("trust_mismatch_tolerance", 2))
         self._good_frames = [0, 0]
+        self._visible_frames = [0, 0]
 
-    def update(self, qualities: list[str], recovering: list[bool]) -> LiveTrustState:
+    def update(self, qualities: list[str], recovering: list[bool],
+               count_qualities: list[str] | None = None) -> LiveTrustState:
         rel_count = 2 if self.bilateral else 1
         q = list(qualities[:rel_count]) + ["LOST"] * max(0, rel_count - len(qualities))
+        cq_src = qualities if count_qualities is None else count_qualities
+        cq = list(cq_src[:rel_count]) + ["LOST"] * max(0, rel_count - len(cq_src))
         r = list(recovering[:rel_count]) + [False] * max(0, rel_count - len(recovering))
 
         for i in range(rel_count):
+            if cq[i] != "LOST" and not r[i]:
+                self._visible_frames[i] += 1
+            else:
+                self._visible_frames[i] = 0
             if q[i] == "GOOD" and not r[i]:
                 self._good_frames[i] += 1
             else:
                 self._good_frames[i] = 0
 
-        render_allowed = any(state != "LOST" for state in q)
-        counting_allowed = all(self._good_frames[i] >= self._count_frames
-                               for i in range(rel_count))
-        coaching_allowed = all(self._good_frames[i] >= self._coach_frames
-                               for i in range(rel_count))
+        render_allowed = any(state != "LOST" for state in cq)
+        counting_sides = tuple(
+            self._visible_frames[i] >= self._count_frames
+            for i in range(rel_count)
+        )
+        coaching_sides = tuple(
+            self._good_frames[i] >= self._coach_frames
+            for i in range(rel_count)
+        )
+        counting_allowed = any(counting_sides)
+        coaching_allowed = all(coaching_sides)
         bilateral_compare_allowed = (
-            self.bilateral and coaching_allowed and
+            self.bilateral and all(coaching_sides) and
             abs(self._good_frames[0] - self._good_frames[1]) <= self._mismatch_tol
         )
 
@@ -86,7 +103,10 @@ class LiveTrustGate:
             counting_allowed=counting_allowed,
             coaching_allowed=coaching_allowed,
             bilateral_compare_allowed=bilateral_compare_allowed,
+            counting_sides=counting_sides,
+            coaching_sides=coaching_sides,
             good_frames=tuple(self._good_frames[:rel_count]),
+            visible_frames=tuple(self._visible_frames[:rel_count]),
         )
 
 
@@ -365,7 +385,7 @@ class RepTracker:
 
     # ------------------------------------------------------------------
     def update(self, p_lm, v_lm, d_lm, swing_lm, w: int, h: int,
-               warmup_mode: bool = False):
+               warmup_mode: bool = False, now: float | None = None):
         """
         p_lm / v_lm / d_lm  : proximal, vertex, distal landmarks
         swing_lm             : landmark used for sway detection (shoulder or hip)
@@ -376,7 +396,7 @@ class RepTracker:
         d = (d_lm.x * w, d_lm.y * h)
 
         # One Euro filtered angle (replaces 5-frame mean buffer)
-        now = time.time()
+        now = time.time() if now is None else now
         dt  = (now - self._last_upd_t) if self._last_upd_t else None
         self._last_upd_t = now
         angle = self._angle_filter.filter(compute_angle(p, v, d), dt)
@@ -407,14 +427,14 @@ class RepTracker:
         if not ex.invert:
             # Angle decreases to complete rep (curl, squat)
             if angle > ex.angle_down and self.stage != "start":
-                self._begin_rep()
+                self._begin_rep(now)
             if angle < ex.angle_up and self.stage == "start":
                 dur = (now - self._rep_start) if self._rep_start else 2.0
                 # Hard block: ignore transitions faster than min_rep_time
                 if dur >= ex.min_rep_time:
                     self._min_dur_blocked = False
                     score = self._score(dur, warmup_mode)
-                    self._finish_rep(score)
+                    self._finish_rep(score, now)
                     rep_done = True
                 elif not self._min_dur_blocked:
                     self.rejected_reps    += 1
@@ -425,13 +445,13 @@ class RepTracker:
         else:
             # Angle increases to complete rep (press, lateral raise, tricep)
             if angle < ex.angle_down and self.stage != "start":
-                self._begin_rep()
+                self._begin_rep(now)
             if angle > ex.angle_up and self.stage == "start":
                 dur = (now - self._rep_start) if self._rep_start else 2.0
                 if dur >= ex.min_rep_time:
                     self._min_dur_blocked = False
                     score = self._score(dur, warmup_mode)
-                    self._finish_rep(score)
+                    self._finish_rep(score, now)
                     rep_done = True
                 elif not self._min_dur_blocked:
                     self.rejected_reps    += 1
@@ -448,9 +468,9 @@ class RepTracker:
 
         return angle, swinging, rep_done, score
 
-    def _begin_rep(self) -> None:
+    def _begin_rep(self, now: float | None = None) -> None:
         self.stage             = "start"
-        self._rep_start        = time.time()
+        self._rep_start        = time.time() if now is None else now
         self.rep_elapsed       = 0.0
         self._rep_min_a        = 180.0
         self._rep_max_a        = 0.0
@@ -481,7 +501,8 @@ class RepTracker:
         self._angle_filter.reset()
         self.aborted_reps     += 1
 
-    def _finish_rep(self, score: int):
+    def _finish_rep(self, score: int, now: float | None = None):
+        end_t = time.time() if now is None else now
         self.stage      = "end"
         self.rep_count  += 1
         self.total_reps += 1
@@ -492,7 +513,7 @@ class RepTracker:
             "set_num":     self.current_set,
             "rep_num":     self.rep_count,
             "score":       score,
-            "duration_s":  round((time.time() - self._rep_start) if self._rep_start else 0, 2),
+            "duration_s":  round((end_t - self._rep_start) if self._rep_start else 0, 2),
             "min_angle":   round(self._rep_min_a, 1),
             "max_angle":   round(self._rep_max_a, 1),
             "swing_frames": self._swing_frames,

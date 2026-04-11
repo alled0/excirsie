@@ -641,20 +641,35 @@ def _feedback_strip(frame, msgs: list, h: int):
         put(frame, txt, (12, h - ph + 36 + i * 46), 0.80, severity_color(severity), 2)
 
 
-def draw_live_diagnostics(frame, diag: dict, trust) -> None:
+def draw_live_diagnostics(frame, diag: dict, trust,
+                          raw_quals: list[str] | tuple[str, ...] = (),
+                          trackers: list | None = None) -> None:
     if not diag:
         return
     h, w = frame.shape[:2]
     panel_w = 280
-    trect(frame, w - panel_w - 12, 12, w - 12, 164, (6, 6, 18), 0.88)
+    row_count = 7 + (len(trackers) if trackers else 0)
+    panel_h = 22 + row_count * 20
+    trect(frame, w - panel_w - 12, 12, w - 12, 12 + panel_h, (6, 6, 18), 0.88)
     rows = [
         f"FPS {diag.get('fps', 0):>5.1f}",
         f"dt  {diag.get('dt_ms', 0):>5.1f} ms",
         f"jit {diag.get('jitter_ms', 0):>5.1f} ms",
         f"Q   {' / '.join(diag.get('qualities', ()))}",
+        f"raw {' / '.join(raw_quals)}",
         f"weak {diag.get('weak_frac', 0):.2f}  lost {diag.get('lost_frac', 0):.2f}",
         f"recovery {diag.get('recovery_frac', 0):.2f}",
         f"trust r/c/h {int(trust.render_allowed)}/{int(trust.counting_allowed)}/{int(trust.coaching_allowed)}",
     ]
+    if trackers:
+        labels = ["L", "R", "C"]
+        for i, tr in enumerate(trackers):
+            side = labels[i] if i < len(labels) else f"S{i}"
+            count_ok = int(i < len(trust.counting_sides) and trust.counting_sides[i])
+            coach_ok = int(i < len(trust.coaching_sides) and trust.coaching_sides[i])
+            rows.append(
+                f"{side} c/h {count_ok}/{coach_ok} st:{tr.stage or '-'} rep:{tr.rep_count} "
+                f"rec:{int(tr._recovering)} g:{tr._consecutive_good} l:{tr._consecutive_lost}"
+            )
     for i, text in enumerate(rows):
         put(frame, text, (w - panel_w, 38 + i * 20), 0.54, WHITE, 1)

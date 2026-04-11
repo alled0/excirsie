@@ -747,11 +747,11 @@ New classes:
 - `LiveTrustGate`
 - `LiveDiagnostics`
 
-`LiveTrustGate` tracks consecutive GOOD frames per relevant side and exposes
-strictly increasing trust:
+`LiveTrustGate` tracks per-side visibility and GOOD-confidence streaks and
+exposes strictly increasing trust:
 
 - Rendering is the loosest gate: any non-LOST signal can still draw body overlays
-- Counting is stricter: requires stable GOOD frames
+- Counting is stricter: requires stable non-LOST visibility before live counting runs
 - Coaching is strictest: requires longer stable GOOD tracking
 
 For bilateral exercises, coaching and comparison only unlock when **both**
@@ -823,6 +823,7 @@ Default UX remains clean because diagnostics are off unless explicitly toggled.
 
 - update quality every frame as before
 - only call tracker counting updates once counting trust is reached
+- in bilateral mode, counting is unlocked per side so one weak arm does not block the other arm from counting
 - only show coaching once coaching trust is reached
 - keep setup guidance available during weak confidence
 - keep diagnostics optional
@@ -848,3 +849,13 @@ python -m unittest discover tests
 Result:
 - `Ran 137 tests`
 - `OK`
+
+### Files Changed in Phase 1.2
+
+| File | Change |
+|------|--------|
+| `bicep_curl_counter.py` | Wired live trust state into the workout loop; gated live counting/coaching/rendering; added diagnostics toggle (`D`) |
+| `taharrak/tracker.py` | Added `LiveTrustState`, `LiveTrustGate`, and `LiveDiagnostics`; added per-side counting/coaching trust signals |
+| `taharrak/analysis.py` | Added trust-aware setup guidance fallback and coaching suppression under weak trust |
+| `taharrak/ui.py` | Hid unstable angle/tempo values; gated bilateral comparison UI; added diagnostics overlay |
+| `tests/test_live_trust.py` | Added focused tests for trust transitions, setup guidance, diagnostics math, comparison suppression, and UI value hiding |

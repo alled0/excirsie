@@ -21,7 +21,7 @@ from taharrak.exercises.bicep_curl import BICEP_CURL
 from taharrak.tracker import RepTracker
 
 # Reuse dt-injection helpers from test_fsm
-from tests.test_fsm import _hold_position, _hold_until_done, _SIM_DT
+from tests.test_fsm import _angle_to_lms, _hold_position, _hold_until_done, _SIM_DT
 
 
 # ── Tracker factory ───────────────────────────────────────────────────────────
@@ -40,6 +40,30 @@ def _make_tracker(**overrides):
     }
     cfg.update(overrides)
     return RepTracker("right", BICEP_CURL, cfg)
+
+
+def _advance_with_video_time(tr, angle_deg: float, frame_idx: int,
+                             n: int = 20, w: int = 1, h: int = 1):
+    """Feed n synthetic video frames using explicit timestamps."""
+    p, v, d, s = _angle_to_lms(angle_deg)
+    result = (angle_deg, False, False, None)
+    for i in range(n):
+        frame_time_s = (frame_idx + i) * _SIM_DT
+        result = tr.update(p, v, d, s, w, h, now=frame_time_s)
+    return frame_idx + n, result
+
+
+def _advance_until_done_with_video_time(tr, angle_deg: float, frame_idx: int,
+                                        max_frames: int = 40,
+                                        w: int = 1, h: int = 1):
+    """Feed synthetic video frames until a rep completes or frames run out."""
+    p, v, d, s = _angle_to_lms(angle_deg)
+    for i in range(max_frames):
+        frame_time_s = (frame_idx + i) * _SIM_DT
+        _, _, done, score = tr.update(p, v, d, s, w, h, now=frame_time_s)
+        if done:
+            return frame_idx + i + 1, True, score
+    return frame_idx + max_frames, False, None
 
 
 # ── aborted_reps tests ────────────────────────────────────────────────────────
@@ -234,6 +258,36 @@ class TestComputeSignalQuality(unittest.TestCase):
                     sq = compute_signal_quality(d, r, rec)
                     self.assertGreaterEqual(sq, 0.0)
                     self.assertLessEqual(sq, 1.0)
+
+
+class TestOfflineReplayTimingRegression(unittest.TestCase):
+
+    def test_explicit_video_time_preserves_valid_rep(self):
+        tr = _make_tracker()
+
+        frame_idx, _ = _advance_with_video_time(tr, 165.0, frame_idx=0, n=40)
+        self.assertEqual(tr.stage, "start")
+
+        frame_idx, done, _ = _advance_until_done_with_video_time(
+            tr, 35.0, frame_idx=frame_idx, max_frames=40
+        )
+        self.assertTrue(done)
+        self.assertEqual(tr.rep_count, 1)
+        self.assertEqual(tr.rejected_reps, 0)
+
+    def test_offline_timebase_is_independent_from_live_wall_clock(self):
+        tr = _make_tracker()
+        frame_idx = 0
+
+        frame_idx, _ = _advance_with_video_time(tr, 165.0, frame_idx, n=40)
+        frame_idx, done, _ = _advance_until_done_with_video_time(
+            tr, 35.0, frame_idx, max_frames=40
+        )
+
+        self.assertTrue(done)
+        self.assertGreaterEqual(frame_idx * _SIM_DT, BICEP_CURL.min_rep_time)
+        self.assertEqual(tr.rep_count, 1)
+        self.assertEqual(tr.rejected_reps, 0)
 
 
 if __name__ == "__main__":
