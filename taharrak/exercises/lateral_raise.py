@@ -1,5 +1,5 @@
 """Lateral Raise — dumbbell side raise, both arms tracked independently."""
-from .base import Exercise, LH, LS, LE, RH, RS, RE
+from .base import Exercise, LH, LS, LE, RH, RS, RE, LW, RW
 
 LATERAL_RAISE = Exercise(
     name              = "Lateral Raise",
@@ -19,4 +19,6 @@ LATERAL_RAISE = Exercise(
     min_rep_time      = 1.0,
     stage_labels      = ("DOWN", "UP"),
     arc_joint_idx     = 1,      # arc gauge on shoulder
+    key_joints_left   = (LS, LE),   # shoulder + elbow must be visible
+    key_joints_right  = (RS, RE),
 )

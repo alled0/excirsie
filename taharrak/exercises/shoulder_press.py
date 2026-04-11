@@ -19,4 +19,6 @@ SHOULDER_PRESS = Exercise(
     min_rep_time      = 1.0,
     stage_labels      = ("START", "PRESS"),
     arc_joint_idx     = 1,       # arc gauge on elbow
+    key_joints_left   = (LE, LW),  # elbow + wrist must be visible
+    key_joints_right  = (RE, RW),
 )

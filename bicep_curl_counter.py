@@ -23,8 +23,9 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from taharrak.exercises  import EXERCISES
-from taharrak.tracker    import RepTracker, VoiceEngine, LandmarkSmoother
-from taharrak.analysis   import det_quality_ex, build_msgs, analyze_camera_position
+from taharrak.tracker    import RepTracker, VoiceEngine, OneEuroLandmarkSmoother
+from taharrak.analysis   import (det_quality_ex, build_msgs,
+                                  analyze_camera_position, check_exercise_framing)
 from taharrak.session    import save_csv, persist_session
 from taharrak.messages   import t
 from taharrak.database   import (init_db, get_last_sessions,
@@ -152,9 +153,12 @@ def main():
         output_segmentation_masks=seg_enabled,
     )
 
-    lm_smoother = LandmarkSmoother(
-        num_landmarks=33,
-        window=cfg.get("landmark_smooth_window", 7),
+    lm_smoother = OneEuroLandmarkSmoother(
+        num_landmarks = 33,
+        freq          = fps,
+        min_cutoff    = cfg.get("one_euro_min_cutoff", 1.5),
+        beta          = cfg.get("one_euro_beta",       0.007),
+        d_cutoff      = cfg.get("one_euro_d_cutoff",   1.0),
     )
 
     # ── State machine variables ───────────────────────────────────────
@@ -236,7 +240,8 @@ def main():
                 cam_feedback = []
                 if lm_smooth:
                     l_q, r_q = det_quality_ex(lm_smooth, exercise, cfg)
-                    cam_feedback = analyze_camera_position(lm_smooth)
+                    cam_feedback = (analyze_camera_position(lm_smooth) +
+                                   check_exercise_framing(lm_smooth, exercise, cfg))
                     can_start = (
                         l_q == "GOOD" and
                         (r_q == "GOOD" or not exercise.bilateral) and

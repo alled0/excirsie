@@ -91,6 +91,7 @@ MESSAGES = {
         "cam_turn_left":      "Turn slightly left to face camera",
         "cam_turn_right":     "Turn slightly right to face camera",
         "cam_poor_vis":       "Poor visibility — improve lighting",
+        "joint_hidden":       "Key joint not visible — extend arm into frame",
     },
     "ar": {
         "app_title":        "تحرك — لياقة بالذكاء الاصطناعي",
@@ -165,6 +166,7 @@ MESSAGES = {
         "cam_turn_left":      "استدر قليلاً لليسار",
         "cam_turn_right":     "استدر قليلاً لليمين",
         "cam_poor_vis":       "الرؤية ضعيفة — حسّن الإضاءة",
+        "joint_hidden":       "مفصل رئيسي مخفي — أظهر ذراعك في الإطار",
     },
 }
 

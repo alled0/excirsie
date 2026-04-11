@@ -1,11 +1,15 @@
 """
 Core tracking classes for Taharrak.
-- RepTracker       : generic rep counter + form scorer for any exercise
-- ConfidenceSmoother: prevents flickering GOOD/WEAK/LOST via majority vote
-- FatigueDetector  : detects form breakdown within a set
-- VoiceEngine      : background TTS thread
+- RepTracker            : generic rep counter + form scorer for any exercise
+- ConfidenceSmoother    : prevents flickering GOOD/WEAK/LOST via majority vote
+- FatigueDetector       : detects form breakdown within a set
+- VoiceEngine           : background TTS thread
+- OneEuroFilter         : adaptive low-pass filter for real-time signals
+- OneEuroLandmarkSmoother: per-landmark One Euro filter (replaces sliding window)
+- LandmarkSmoother      : legacy alias → OneEuroLandmarkSmoother
 """
 
+import math
 import queue
 import threading
 import time
@@ -18,7 +22,7 @@ import numpy as np
 # ── Smoothed Landmark ─────────────────────────────────────────────────────────
 
 class SmoothedLandmark:
-    """Lightweight landmark proxy returned by LandmarkSmoother."""
+    """Lightweight landmark proxy returned by any landmark smoother."""
     __slots__ = ('x', 'y', 'z', 'visibility')
 
     def __init__(self, x: float, y: float, z: float, visibility: float):
@@ -28,37 +32,129 @@ class SmoothedLandmark:
         self.visibility = visibility
 
 
-# ── Landmark Smoother ─────────────────────────────────────────────────────────
+# ── One Euro Filter ───────────────────────────────────────────────────────────
 
-class LandmarkSmoother:
+class OneEuroFilter:
     """
-    Sliding-window average of landmark x/y/z coordinates to reduce jitter
-    caused by loose clothing obscuring true joint positions.
-    Visibility is kept raw (not averaged) so detection quality is unaffected.
-    Window size is configurable via config.json → landmark_smooth_window.
+    1€ filter — adaptive low-pass filter for real-time scalar smoothing.
+
+    At low velocity (joint held still) it applies heavy smoothing to kill
+    jitter.  At high velocity (rep boundary) it opens up the cutoff and
+    tracks the signal with minimal lag.
+
+    Reference: Casiez et al., CHI 2012, "1€ Filter: A Simple Speed-based
+    Low-pass Filter for Noisy Input in Interactive Systems."
+
+    Parameters
+    ----------
+    freq        : nominal sampling frequency (Hz).  Used as fallback dt.
+    min_cutoff  : base cutoff frequency (Hz) at zero velocity.
+                  Lower → smoother at rest, more lag on fast motion.
+    beta        : speed coefficient.  Higher → more responsive at velocity.
+    d_cutoff    : cutoff for the derivative low-pass (Hz).
     """
 
-    def __init__(self, num_landmarks: int = 33, window: int = 7):
-        self._bufs: list = [deque(maxlen=window) for _ in range(num_landmarks)]
+    def __init__(self, freq: float = 30.0, min_cutoff: float = 1.5,
+                 beta: float = 0.007, d_cutoff: float = 1.0):
+        self.freq       = max(float(freq), 1e-6)
+        self.min_cutoff = min_cutoff
+        self.beta       = beta
+        self.d_cutoff   = d_cutoff
+        self._x_prev: float | None = None
+        self._dx_prev: float       = 0.0
+
+    @staticmethod
+    def _alpha(cutoff: float, dt: float) -> float:
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / max(dt, 1e-9))
+
+    def filter(self, x: float, dt: float | None = None) -> float:
+        """
+        Filter a new sample x.  Pass dt (seconds) for accurate timing;
+        omit to use 1/freq as the nominal frame period.
+        Returns the filtered value.
+        """
+        if dt is None:
+            dt = 1.0 / self.freq
+        dt = max(dt, 1e-9)
+
+        if self._x_prev is None:
+            self._x_prev = x
+            return x
+
+        # Low-pass filter the derivative
+        dx       = (x - self._x_prev) / dt
+        a_d      = self._alpha(self.d_cutoff, dt)
+        dx_hat   = a_d * dx + (1.0 - a_d) * self._dx_prev
+
+        # Adaptive cutoff — opens up when motion is fast
+        cutoff   = self.min_cutoff + self.beta * abs(dx_hat)
+        a        = self._alpha(cutoff, dt)
+        x_hat    = a * x + (1.0 - a) * self._x_prev
+
+        self._x_prev  = x_hat
+        self._dx_prev = dx_hat
+        return x_hat
+
+    def reset(self) -> None:
+        """Clear filter state (e.g. after landmark loss / set restart)."""
+        self._x_prev  = None
+        self._dx_prev = 0.0
+
+
+# ── One Euro Landmark Smoother ────────────────────────────────────────────────
+
+class OneEuroLandmarkSmoother:
+    """
+    Per-landmark One Euro filter applied independently to x, y, z.
+    Visibility is kept raw (filtering it would slow down LOST detection).
+
+    Compared with the old sliding-window average:
+    - Adapts smoothing strength to motion speed
+    - Less lag at rep boundaries (high angular velocity)
+    - More smoothing during holds (low velocity)
+
+    Parameters map directly to OneEuroFilter:
+      min_cutoff (config: one_euro_min_cutoff, default 1.5 Hz)
+      beta       (config: one_euro_beta,       default 0.007)
+      d_cutoff   (config: one_euro_d_cutoff,   default 1.0 Hz)
+    """
+
+    def __init__(self, num_landmarks: int = 33, freq: float = 30.0,
+                 min_cutoff: float = 1.5, beta: float = 0.007,
+                 d_cutoff: float = 1.0):
+        def _f():
+            return OneEuroFilter(freq, min_cutoff, beta, d_cutoff)
+        self._fx = [_f() for _ in range(num_landmarks)]
+        self._fy = [_f() for _ in range(num_landmarks)]
+        self._fz = [_f() for _ in range(num_landmarks)]
 
     def smooth(self, landmarks) -> list:
         """Takes a raw MediaPipe landmark list, returns List[SmoothedLandmark]."""
         result = []
         for i, lm in enumerate(landmarks):
-            buf = self._bufs[i]
-            buf.append((lm.x, lm.y, lm.z))
-            n = len(buf)
             result.append(SmoothedLandmark(
-                x=sum(p[0] for p in buf) / n,
-                y=sum(p[1] for p in buf) / n,
-                z=sum(p[2] for p in buf) / n,
+                x=self._fx[i].filter(lm.x),
+                y=self._fy[i].filter(lm.y),
+                z=self._fz[i].filter(lm.z),
                 visibility=lm.visibility,
             ))
         return result
 
-    def reset(self):
-        for b in self._bufs:
-            b.clear()
+    def reset(self) -> None:
+        """Reset all per-landmark filters (call at set start or after loss)."""
+        for f in self._fx + self._fy + self._fz:
+            f.reset()
+
+
+# ── Backward-compatible alias ──────────────────────────────────────────────────
+# Old code that does LandmarkSmoother(num_landmarks=33, window=7) still works
+# because window is silently ignored.  New code should use OneEuroLandmarkSmoother.
+
+class LandmarkSmoother(OneEuroLandmarkSmoother):
+    """Legacy name for OneEuroLandmarkSmoother.  window kwarg is ignored."""
+    def __init__(self, num_landmarks: int = 33, window: int = 7, **kw):
+        super().__init__(num_landmarks=num_landmarks, **kw)
 
 try:
     import pyttsx3
@@ -112,14 +208,23 @@ class RepTracker:
         self.exercise = exercise
         self.cfg      = cfg
 
-        self.stage      = None      # "start" | "end"
+        self.stage      = None      # "start" | "end" | None (unknown)
         self.rep_count  = 0         # reps this set
         self.total_reps = 0         # all-time reps
         self.current_set = 1
         self.form_scores: list  = []
         self.rep_log: list      = []
 
-        self._angle_buf     = deque(maxlen=5)
+        # One Euro filter for the angle signal (replaces 5-frame mean buffer)
+        fps = float(cfg.get("camera_fps", 30))
+        self._angle_filter   = OneEuroFilter(
+            freq       = fps,
+            min_cutoff = cfg.get("one_euro_min_cutoff", 1.5),
+            beta       = cfg.get("one_euro_beta",       0.007),
+            d_cutoff   = cfg.get("one_euro_d_cutoff",   1.0),
+        )
+        self._last_upd_t: float = 0.0   # wall-clock timestamp of last update()
+
         self._sh_y_hist     = deque(maxlen=cfg.get("swing_window", 15))
         self._rep_start     = None
         self._rep_min_a     = 180.0
@@ -127,6 +232,17 @@ class RepTracker:
         self._swing_frames  = 0
         self._in_rep        = False
         self.rep_elapsed    = 0.0
+
+        # Recovery / lost-frame gating
+        # After the landmark comes back from LOST, we wait _recovery_frames
+        # consecutive GOOD frames before allowing new FSM transitions.
+        # If a rep is in-progress and LOST persists for _max_lost_frames, the
+        # in-progress rep is discarded to avoid phantom counts on re-appear.
+        self._recovery_frames  = cfg.get("fsm_recovery_frames", 3)
+        self._max_lost_frames  = cfg.get("fsm_max_lost_frames", 15)
+        self._consecutive_good = 0
+        self._consecutive_lost = 0
+        self._recovering       = False
 
         self._smoother      = ConfidenceSmoother(cfg.get("confidence_smoother_window", 10))
         self._fatigue       = FatigueDetector(cfg.get("fatigue_score_gap", 20))
@@ -143,8 +259,11 @@ class RepTracker:
         v = (v_lm.x * w, v_lm.y * h)
         d = (d_lm.x * w, d_lm.y * h)
 
-        self._angle_buf.append(compute_angle(p, v, d))
-        angle = float(np.mean(self._angle_buf))
+        # One Euro filtered angle (replaces 5-frame mean buffer)
+        now = time.time()
+        dt  = (now - self._last_upd_t) if self._last_upd_t else None
+        self._last_upd_t = now
+        angle = self._angle_filter.filter(compute_angle(p, v, d), dt)
 
         self._sh_y_hist.append(swing_lm.y)
         swinging = (
@@ -153,7 +272,17 @@ class RepTracker:
         )
 
         # Tempo tracking
-        self.rep_elapsed = (time.time() - self._rep_start) if self._rep_start else 0.0
+        self.rep_elapsed = (now - self._rep_start) if self._rep_start else 0.0
+
+        # ── Recovery gate ──────────────────────────────────────────────
+        # After landmark loss, suppress FSM transitions until the signal
+        # has been stable for _recovery_frames consecutive GOOD frames.
+        # Still compute and return angle/swing so the HUD stays live.
+        if self._recovering:
+            if self._in_rep:
+                self._rep_min_a = min(self._rep_min_a, angle)
+                self._rep_max_a = max(self._rep_max_a, angle)
+            return angle, swinging, False, None
 
         rep_done = False
         score    = None
@@ -164,19 +293,22 @@ class RepTracker:
             if angle > ex.angle_down and self.stage != "start":
                 self._begin_rep()
             if angle < ex.angle_up and self.stage == "start":
-                dur   = (time.time() - self._rep_start) if self._rep_start else 2.0
-                score = self._score(dur, warmup_mode)
-                self._finish_rep(score)
-                rep_done = True
+                dur = (now - self._rep_start) if self._rep_start else 2.0
+                # Hard block: ignore transitions faster than min_rep_time
+                if dur >= ex.min_rep_time:
+                    score = self._score(dur, warmup_mode)
+                    self._finish_rep(score)
+                    rep_done = True
         else:
             # Angle increases to complete rep (press, lateral raise, tricep)
             if angle < ex.angle_down and self.stage != "start":
                 self._begin_rep()
             if angle > ex.angle_up and self.stage == "start":
-                dur   = (time.time() - self._rep_start) if self._rep_start else 2.0
-                score = self._score(dur, warmup_mode)
-                self._finish_rep(score)
-                rep_done = True
+                dur = (now - self._rep_start) if self._rep_start else 2.0
+                if dur >= ex.min_rep_time:
+                    score = self._score(dur, warmup_mode)
+                    self._finish_rep(score)
+                    rep_done = True
 
         if self._in_rep:
             self._rep_min_a = min(self._rep_min_a, angle)
@@ -186,7 +318,7 @@ class RepTracker:
 
         return angle, swinging, rep_done, score
 
-    def _begin_rep(self):
+    def _begin_rep(self) -> None:
         self.stage          = "start"
         self._rep_start     = time.time()
         self.rep_elapsed    = 0.0
@@ -194,6 +326,22 @@ class RepTracker:
         self._rep_max_a     = 0.0
         self._swing_frames  = 0
         self._in_rep        = True
+
+    def _abort_rep(self) -> None:
+        """
+        Discard an in-progress rep after prolonged landmark loss.
+        Resets to 'unknown' stage so the FSM waits for a clean starting
+        position before accepting the next rep — prevents phantom counts
+        when landmarks reappear mid-movement.
+        """
+        self._in_rep        = False
+        self._rep_start     = None
+        self._rep_min_a     = 180.0
+        self._rep_max_a     = 0.0
+        self._swing_frames  = 0
+        self.stage          = None   # unknown — wait for clear start position
+        self.rep_elapsed    = 0.0
+        self._angle_filter.reset()
 
     def _finish_rep(self, score: int):
         self.stage      = "end"
@@ -247,8 +395,41 @@ class RepTracker:
         return max(0, min(100, s))
 
     # ------------------------------------------------------------------
+    def update_quality(self, raw_quality: str) -> str:
+        """
+        Update confidence smoother + recovery-gating state machine.
+        Call every frame, regardless of whether update() will be called.
+        Returns the smoothed quality string ('GOOD' / 'WEAK' / 'LOST').
+
+        Recovery logic
+        ──────────────
+        • LOST for N ≥ max_lost_frames frames while in-rep → abort rep
+        • GOOD after any LOST period → enter recovery mode
+        • After recovery_frames consecutive GOOD frames → exit recovery
+          and allow FSM transitions again
+        """
+        smoothed = self._smoother.update(raw_quality)
+
+        if smoothed == "LOST":
+            self._consecutive_good  = 0
+            self._consecutive_lost += 1
+            if self._in_rep and self._consecutive_lost >= self._max_lost_frames:
+                self._abort_rep()
+        else:
+            if self._consecutive_lost > 0:
+                # Transition: just came back from a loss period
+                self._recovering       = True
+                self._consecutive_good = 0
+            self._consecutive_lost = 0
+            self._consecutive_good += 1
+            if self._recovering and self._consecutive_good >= self._recovery_frames:
+                self._recovering = False
+
+        return smoothed
+
+    # Backward-compatible alias
     def smooth_quality(self, raw_quality: str) -> str:
-        return self._smoother.update(raw_quality)
+        return self.update_quality(raw_quality)
 
     def is_fatigued(self) -> bool:
         return self._fatigue.check(self.form_scores)
@@ -261,7 +442,7 @@ class RepTracker:
     def best_score(self) -> int:
         return max(self.form_scores) if self.form_scores else 0
 
-    def reset_set(self):
+    def reset_set(self) -> None:
         self.rep_count     = 0
         self.stage         = None
         self._in_rep       = False
@@ -270,8 +451,13 @@ class RepTracker:
         self._rep_max_a    = 0.0
         self._swing_frames = 0
         self.rep_elapsed   = 0.0
-        self._angle_buf.clear()
+        self._last_upd_t   = 0.0
+        self._angle_filter.reset()
         self._sh_y_hist.clear()
+        # Reset recovery state so the next set starts fresh
+        self._consecutive_good = 0
+        self._consecutive_lost = 0
+        self._recovering       = False
 
     def all_rep_logs(self) -> list:
         return self.rep_log

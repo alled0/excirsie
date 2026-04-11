@@ -30,5 +30,12 @@
     "warmup_mode": true,
     "landmark_smooth_window": 7,
     "segmentation_enabled": true,
-    "segmentation_bg_color": [10, 10, 25]
+    "segmentation_bg_color": [10, 10, 25],
+
+    "one_euro_min_cutoff": 1.5,
+    "one_euro_beta": 0.007,
+    "one_euro_d_cutoff": 1.0,
+
+    "fsm_recovery_frames": 3,
+    "fsm_max_lost_frames": 15
 }

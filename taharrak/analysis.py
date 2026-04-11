@@ -79,6 +79,37 @@ def analyze_camera_position(lm) -> list:
     return issues
 
 
+# ── Exercise-specific framing gate ────────────────────────────────────────────
+
+def check_exercise_framing(lm, exercise: Exercise, cfg: dict) -> list:
+    """
+    Checks that the joints critical to *this* exercise are visible at GOOD
+    confidence.  Returns a list of message keys; empty means all clear.
+
+    Unlike det_quality_ex (which checks all joints and returns GOOD/WEAK/LOST),
+    this function returns actionable message keys for the calibration HUD so
+    the user knows *which* joints are hidden.
+
+    The checked joints come from exercise.key_joints_left /
+    exercise.key_joints_right.  If an exercise has no key joints set, this
+    function returns an empty list (no-op, safe for legacy exercises).
+    """
+    VG     = cfg.get("vis_good", 0.68)
+    issues = []
+
+    if exercise.bilateral and exercise.key_joints_left:
+        hidden_l = [i for i in exercise.key_joints_left if lm[i].visibility < VG]
+        if hidden_l:
+            issues.append("joint_hidden")
+
+    if exercise.key_joints_right:
+        hidden_r = [i for i in exercise.key_joints_right if lm[i].visibility < VG]
+        if hidden_r and "joint_hidden" not in issues:
+            issues.append("joint_hidden")
+
+    return issues
+
+
 # ── Form feedback messages ────────────────────────────────────────────────────
 
 _SIDES_EN = ["LEFT", "RIGHT"]

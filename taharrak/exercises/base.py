@@ -27,6 +27,10 @@ class Exercise:
     min_rep_time: float         # below this → "too fast" penalty
     stage_labels: tuple         # (start_label, end_label) shown in the HUD
     arc_joint_idx: int          # which joint in the triplet gets the arc gauge (0/1/2)
+    # Subset of joints that MUST be reliably visible before counting begins.
+    # Defaults to empty so existing callers that don't set it still work.
+    key_joints_left:  tuple = ()
+    key_joints_right: tuple = ()
 
 
 # ── BlazePose 33-landmark indices ─────────────────────────────────────────────

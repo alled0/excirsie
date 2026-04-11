@@ -1,5 +1,5 @@
 """Squat — bodyweight or barbell squat, single (right-side) tracker."""
-from .base import Exercise, LH, LK, LA, RH, RK, RA
+from .base import Exercise, LH, LK, LA, RH, RK, RA  # noqa: F401
 
 SQUAT = Exercise(
     name              = "Squat",
@@ -19,4 +19,6 @@ SQUAT = Exercise(
     min_rep_time      = 1.5,
     stage_labels      = ("STAND", "DEPTH"),
     arc_joint_idx     = 1,      # arc gauge on knee
+    key_joints_left   = (LK, LA),  # knee + ankle must be visible
+    key_joints_right  = (RK, RA),
 )
