@@ -21,8 +21,9 @@ automatically if it is not already present.
 
 For Streamlit Community Cloud deployment:
 
-- add root-level `packages.txt` with `libgl1`
-- use Python `3.12` in Streamlit Cloud Advanced settings
+- Streamlit Cloud may require root-level `packages.txt`
+- use `libgl1`, `libgles2`, and `libegl1` in that file
+- preferably use Python `3.12` in Streamlit Cloud Advanced settings
 
 ---
 
