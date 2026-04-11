@@ -19,6 +19,11 @@ The app opens at `http://localhost:8501`.
 On first run it downloads the MediaPipe pose model (`pose_landmarker_lite.task`)
 automatically if it is not already present.
 
+For Streamlit Community Cloud deployment:
+
+- add root-level `packages.txt` with `libgl1`
+- use Python `3.12` in Streamlit Cloud Advanced settings
+
 ---
 
 ## What is included
