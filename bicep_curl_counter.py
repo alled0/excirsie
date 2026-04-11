@@ -23,7 +23,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from taharrak.exercises  import EXERCISES
-from taharrak.tracker    import RepTracker, VoiceEngine, OneEuroLandmarkSmoother
+from taharrak.tracker    import RepTracker, VoiceEngine, OneEuroLandmarkSmoother, TrackingGuard
 from taharrak.analysis   import (det_quality_ex, build_msgs,
                                   analyze_camera_position, check_exercise_framing)
 from taharrak.session    import save_csv, persist_session
@@ -182,6 +182,7 @@ def main():
     history_scroll  = 0
     pb              = {}
 
+    guard     = None
     frame_idx = 0
     mirror    = cfg.get("mirror_mode", True)
 
@@ -330,6 +331,12 @@ def main():
                                 score_flash["center"] = (sc, time.time() + cfg["score_flash_duration"])
                                 voice.say(f"Rep {trackers[0].rep_count}. Score {sc}", 1.0)
 
+                if lm_smooth and guard and guard.update(lm_smooth, trackers, exercise):
+                    for tr in trackers:
+                        tr.reset_tracking()
+                    lm_smoother.reset()
+                    guard.reset()
+
                 msgs = build_msgs(trackers, angles, swings,
                                   exercise, voice, cfg, lang)
 
@@ -417,6 +424,7 @@ def main():
                         if exercise.bilateral
                         else [RepTracker("center", exercise, cfg)]
                     )
+                    guard         = TrackingGuard(cfg)
                     set_count     = 0
                     set_history   = []
                     session_start = time.time()

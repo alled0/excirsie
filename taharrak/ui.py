@@ -94,6 +94,16 @@ def q_color(q: str):
     return {"GOOD": GREEN, "WEAK": ORANGE, "LOST": RED}.get(q, GRAY)
 
 
+def severity_color(severity: str) -> tuple:
+    """Map a semantic severity key from build_msgs to a BGR colour.
+
+    "error"   → RED    (must-fix issue)
+    "warning" → ORANGE (form / ROM nudge)
+    "ok"      → GREEN  (positive cue)
+    """
+    return {"error": RED, "warning": ORANGE, "ok": GREEN}.get(severity, WHITE)
+
+
 def rating_color(r: str):
     return {"S": YELLOW, "A": GREEN, "B": ORANGE, "C": RED}.get(r, WHITE)
 
@@ -617,5 +627,5 @@ def _feedback_strip(frame, msgs: list, h: int):
         return
     ph = 46 * len(msgs) + 16
     trect(frame, 0, h - ph, frame.shape[1], h, (8, 8, 35))
-    for i, (txt, col) in enumerate(msgs):
-        put(frame, txt, (12, h - ph + 36 + i * 46), 0.80, col, 2)
+    for i, (txt, severity) in enumerate(msgs):
+        put(frame, txt, (12, h - ph + 36 + i * 46), 0.80, severity_color(severity), 2)

@@ -13,6 +13,23 @@ from taharrak.database import save_session
 from taharrak.ui import rating
 
 
+def save_events_csv(trackers: list):
+    """Export non-completion events (abort/reject/suppress) to a timestamped CSV."""
+    all_events = []
+    for tr in trackers:
+        all_events.extend(tr.all_event_logs())
+    if not all_events:
+        return
+    all_events.sort(key=lambda e: e["timestamp"])
+    fname = f"events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(fname, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=all_events[0].keys(),
+                                extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_events)
+    print(f"Event log saved → {fname}")
+
+
 def save_csv(trackers: list):
     """Export every rep across all trackers to a timestamped CSV file."""
     all_rows = []

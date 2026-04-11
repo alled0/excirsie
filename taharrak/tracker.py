@@ -23,13 +23,15 @@ import numpy as np
 
 class SmoothedLandmark:
     """Lightweight landmark proxy returned by any landmark smoother."""
-    __slots__ = ('x', 'y', 'z', 'visibility')
+    __slots__ = ('x', 'y', 'z', 'visibility', 'presence')
 
-    def __init__(self, x: float, y: float, z: float, visibility: float):
+    def __init__(self, x: float, y: float, z: float, visibility: float,
+                 presence: float = 1.0):
         self.x = x
         self.y = y
         self.z = z
         self.visibility = visibility
+        self.presence   = presence
 
 
 # ── One Euro Filter ───────────────────────────────────────────────────────────
@@ -138,6 +140,7 @@ class OneEuroLandmarkSmoother:
                 y=self._fy[i].filter(lm.y),
                 z=self._fz[i].filter(lm.z),
                 visibility=lm.visibility,
+                presence=getattr(lm, 'presence', 1.0),
             ))
         return result
 
@@ -233,6 +236,17 @@ class RepTracker:
         self._in_rep        = False
         self.rep_elapsed    = 0.0
 
+        # Per-set robustness counters (used by eval harness + coaching)
+        self.aborted_reps      = 0   # reps discarded by _abort_rep()
+        self.rejected_reps     = 0   # reps blocked by min_rep_time gate
+        self._min_dur_blocked  = False  # True while held below threshold w/ short dur
+
+        # Structured event log for non-completion events
+        # Categories: lost_visibility, below_min_duration, recovery_interrupted,
+        #             tracking_reset
+        # Preserved across reset_tracking(); cleared on reset_set().
+        self.event_log: list   = []
+
         # Recovery / lost-frame gating
         # After the landmark comes back from LOST, we wait _recovery_frames
         # consecutive GOOD frames before allowing new FSM transitions.
@@ -296,9 +310,16 @@ class RepTracker:
                 dur = (now - self._rep_start) if self._rep_start else 2.0
                 # Hard block: ignore transitions faster than min_rep_time
                 if dur >= ex.min_rep_time:
+                    self._min_dur_blocked = False
                     score = self._score(dur, warmup_mode)
                     self._finish_rep(score)
                     rep_done = True
+                elif not self._min_dur_blocked:
+                    self.rejected_reps    += 1
+                    self._min_dur_blocked  = True
+                    self._log_event("below_min_duration",
+                                    duration_s=round(dur, 3),
+                                    min_rep_time=ex.min_rep_time)
         else:
             # Angle increases to complete rep (press, lateral raise, tricep)
             if angle < ex.angle_down and self.stage != "start":
@@ -306,9 +327,16 @@ class RepTracker:
             if angle > ex.angle_up and self.stage == "start":
                 dur = (now - self._rep_start) if self._rep_start else 2.0
                 if dur >= ex.min_rep_time:
+                    self._min_dur_blocked = False
                     score = self._score(dur, warmup_mode)
                     self._finish_rep(score)
                     rep_done = True
+                elif not self._min_dur_blocked:
+                    self.rejected_reps    += 1
+                    self._min_dur_blocked  = True
+                    self._log_event("below_min_duration",
+                                    duration_s=round(dur, 3),
+                                    min_rep_time=ex.min_rep_time)
 
         if self._in_rep:
             self._rep_min_a = min(self._rep_min_a, angle)
@@ -319,13 +347,14 @@ class RepTracker:
         return angle, swinging, rep_done, score
 
     def _begin_rep(self) -> None:
-        self.stage          = "start"
-        self._rep_start     = time.time()
-        self.rep_elapsed    = 0.0
-        self._rep_min_a     = 180.0
-        self._rep_max_a     = 0.0
-        self._swing_frames  = 0
-        self._in_rep        = True
+        self.stage             = "start"
+        self._rep_start        = time.time()
+        self.rep_elapsed       = 0.0
+        self._rep_min_a        = 180.0
+        self._rep_max_a        = 0.0
+        self._swing_frames     = 0
+        self._in_rep           = True
+        self._min_dur_blocked  = False
 
     def _abort_rep(self) -> None:
         """
@@ -334,14 +363,21 @@ class RepTracker:
         position before accepting the next rep — prevents phantom counts
         when landmarks reappear mid-movement.
         """
-        self._in_rep        = False
-        self._rep_start     = None
-        self._rep_min_a     = 180.0
-        self._rep_max_a     = 0.0
-        self._swing_frames  = 0
-        self.stage          = None   # unknown — wait for clear start position
-        self.rep_elapsed    = 0.0
+        self._log_event("lost_visibility",
+                        consecutive_lost=self._consecutive_lost,
+                        elapsed_s=round(self.rep_elapsed, 2),
+                        min_angle=round(self._rep_min_a, 1),
+                        max_angle=round(self._rep_max_a, 1))
+        self._in_rep           = False
+        self._rep_start        = None
+        self._rep_min_a        = 180.0
+        self._rep_max_a        = 0.0
+        self._swing_frames     = 0
+        self.stage             = None   # unknown — wait for clear start position
+        self.rep_elapsed       = 0.0
+        self._min_dur_blocked  = False
         self._angle_filter.reset()
+        self.aborted_reps     += 1
 
     def _finish_rep(self, score: int):
         self.stage      = "end"
@@ -394,6 +430,16 @@ class RepTracker:
 
         return max(0, min(100, s))
 
+    def _log_event(self, category: str, **ctx) -> None:
+        """Append a structured non-completion event to event_log."""
+        self.event_log.append({
+            "timestamp": datetime.now().isoformat(),
+            "side":      self.side,
+            "set_num":   self.current_set,
+            "category":  category,
+            **ctx,
+        })
+
     # ------------------------------------------------------------------
     def update_quality(self, raw_quality: str) -> str:
         """
@@ -420,6 +466,9 @@ class RepTracker:
                 # Transition: just came back from a loss period
                 self._recovering       = True
                 self._consecutive_good = 0
+                if self._in_rep:
+                    self._log_event("recovery_interrupted",
+                                    consecutive_lost=self._consecutive_lost)
             self._consecutive_lost = 0
             self._consecutive_good += 1
             if self._recovering and self._consecutive_good >= self._recovery_frames:
@@ -443,15 +492,19 @@ class RepTracker:
         return max(self.form_scores) if self.form_scores else 0
 
     def reset_set(self) -> None:
-        self.rep_count     = 0
-        self.stage         = None
-        self._in_rep       = False
-        self._rep_start    = None
-        self._rep_min_a    = 180.0
-        self._rep_max_a    = 0.0
-        self._swing_frames = 0
-        self.rep_elapsed   = 0.0
-        self._last_upd_t   = 0.0
+        self.rep_count        = 0
+        self.stage            = None
+        self._in_rep          = False
+        self._rep_start       = None
+        self._rep_min_a       = 180.0
+        self._rep_max_a       = 0.0
+        self._swing_frames    = 0
+        self.rep_elapsed      = 0.0
+        self._last_upd_t      = 0.0
+        self._min_dur_blocked = False
+        self.aborted_reps     = 0
+        self.rejected_reps    = 0
+        self.event_log        = []
         self._angle_filter.reset()
         self._sh_y_hist.clear()
         # Reset recovery state so the next set starts fresh
@@ -459,8 +512,38 @@ class RepTracker:
         self._consecutive_lost = 0
         self._recovering       = False
 
+    def reset_tracking(self) -> None:
+        """
+        Soft reset: clear per-rep FSM and filter state without touching rep_count.
+        Called by TrackingGuard on re-acquisition to prevent phantom reps while
+        preserving the set's accumulated count.
+        """
+        if self._in_rep:
+            self._log_event("tracking_reset",
+                            min_angle=round(self._rep_min_a, 1),
+                            max_angle=round(self._rep_max_a, 1),
+                            elapsed_s=round(self.rep_elapsed, 2))
+        self._in_rep          = False
+        self._rep_start       = None
+        self._rep_min_a       = 180.0
+        self._rep_max_a       = 0.0
+        self._swing_frames    = 0
+        self._sh_y_hist.clear()
+        self.stage            = None
+        self.rep_elapsed      = 0.0
+        self._last_upd_t      = 0.0
+        self._min_dur_blocked = False
+        self._angle_filter.reset()
+        self._consecutive_good = 0
+        self._consecutive_lost = 0
+        self._recovering       = False
+
     def all_rep_logs(self) -> list:
         return self.rep_log
+
+    def all_event_logs(self) -> list:
+        """Return the list of non-completion events (abort / reject / suppress)."""
+        return self.event_log
 
 
 # ── Voice Engine ──────────────────────────────────────────────────────────────
@@ -493,3 +576,113 @@ class VoiceEngine:
             msg = self._q.get()
             engine.say(msg)
             engine.runAndWait()
+
+
+# ── Tracking Guard ────────────────────────────────────────────────────────────
+
+class TrackingGuard:
+    """
+    System-level re-acquisition guard sitting above the per-arm RepTrackers.
+
+    Monitors four signals each frame and returns True when the overall tracking
+    quality has degraded enough to warrant a hard reset of all FSM / filter state.
+
+    Triggers
+    --------
+    1. Low reliability  — mean key-joint reliability stays below vis_weak for
+                          guard_max_low_rel_frames consecutive frames
+    2. Bbox centroid jump — skeleton centre moves > guard_bbox_jump (normalised)
+                            in a single frame  (large position discontinuity)
+    3. Scale jump        — shoulder span changes > guard_scale_jump relatively
+                            in a single frame  (abrupt zoom / person swap)
+    4. Recovery frequency — trackers enter recovery mode ≥ guard_max_recoveries
+                            times within guard_recovery_window seconds
+
+    Call update() once per WORKOUT frame **after** quality signals have been
+    sent to the trackers so their _recovering flags are current.
+
+    After a trigger, call reset() to clear guard state so the next frame starts
+    fresh comparison instead of immediately re-triggering.
+    """
+
+    def __init__(self, cfg: dict):
+        vw = cfg.get("vis_weak", 0.38)
+
+        self._rel_threshold      = vw
+        self._max_low_rel_frames = int(cfg.get("guard_max_low_rel_frames", 20))
+        self._low_rel_frames     = 0
+
+        self._bbox_jump_thresh   = float(cfg.get("guard_bbox_jump",   0.25))
+        self._scale_jump_thresh  = float(cfg.get("guard_scale_jump",  0.30))
+        self._prev_centroid: tuple | None = None
+        self._prev_scale:    float | None = None
+
+        self._recovery_window    = float(cfg.get("guard_recovery_window", 5.0))
+        self._max_recoveries     = int(cfg.get("guard_max_recoveries",   4))
+        self._recovery_entries: deque = deque()
+        self._prev_recovering    = False
+
+    # ------------------------------------------------------------------
+    def update(self, lm, trackers: list, exercise) -> bool:
+        """
+        Returns True when a tracking reset is recommended.
+        lm       : smoothed landmark list (33 elements)
+        trackers : list of RepTracker instances
+        exercise : current Exercise (for key-joint indices)
+        """
+        from taharrak.analysis import joint_reliability  # late import — avoids circular dep
+
+        now    = time.time()
+        fired  = False
+
+        # 1 ── Low reliability ──────────────────────────────────────────
+        key_idx = exercise.key_joints_right or exercise.joints_right
+        if exercise.bilateral:
+            key_idx = key_idx + (exercise.key_joints_left or exercise.joints_left)
+        rel = sum(joint_reliability(lm[i]) for i in key_idx) / len(key_idx)
+        if rel < self._rel_threshold:
+            self._low_rel_frames += 1
+            if self._low_rel_frames >= self._max_low_rel_frames:
+                fired = True
+        else:
+            self._low_rel_frames = 0
+
+        # 2 ── Bbox centroid jump ───────────────────────────────────────
+        cx = sum(lm[i].x for i in range(33)) / 33
+        cy = sum(lm[i].y for i in range(33)) / 33
+        if self._prev_centroid is not None:
+            dx = cx - self._prev_centroid[0]
+            dy = cy - self._prev_centroid[1]
+            if (dx * dx + dy * dy) ** 0.5 > self._bbox_jump_thresh:
+                fired = True
+        self._prev_centroid = (cx, cy)
+
+        # 3 ── Scale jump (shoulder span) ──────────────────────────────
+        scale = abs(lm[11].x - lm[12].x)
+        if self._prev_scale is not None and self._prev_scale > 1e-4:
+            if abs(scale - self._prev_scale) / self._prev_scale > self._scale_jump_thresh:
+                fired = True
+        self._prev_scale = scale
+
+        # 4 ── Recovery frequency ──────────────────────────────────────
+        recovering_now = any(tr._recovering for tr in trackers)
+        if recovering_now and not self._prev_recovering:
+            self._recovery_entries.append(now)
+        self._prev_recovering = recovering_now
+        # Purge entries outside the sliding window
+        while self._recovery_entries and \
+                now - self._recovery_entries[0] > self._recovery_window:
+            self._recovery_entries.popleft()
+        if len(self._recovery_entries) >= self._max_recoveries:
+            self._recovery_entries.clear()
+            fired = True
+
+        return fired
+
+    def reset(self) -> None:
+        """Clear guard state — call after triggering a tracking reset."""
+        self._low_rel_frames  = 0
+        self._prev_centroid   = None
+        self._prev_scale      = None
+        self._prev_recovering = False
+        self._recovery_entries.clear()

@@ -37,5 +37,11 @@
     "one_euro_d_cutoff": 1.0,
 
     "fsm_recovery_frames": 3,
-    "fsm_max_lost_frames": 15
+    "fsm_max_lost_frames": 15,
+
+    "guard_max_low_rel_frames": 20,
+    "guard_bbox_jump": 0.25,
+    "guard_scale_jump": 0.30,
+    "guard_recovery_window": 5.0,
+    "guard_max_recoveries": 4
 }

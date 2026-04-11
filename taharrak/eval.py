@@ -25,6 +25,15 @@ reps_left           Reps counted on left arm  (bilateral exercises)
 reps_right          Reps counted on right arm (bilateral exercises)
 reps_total          Total reps across all trackers
 fps_mean            Wall-clock processing throughput (frames / elapsed seconds)
+
+Robustness metrics (new)
+------------------------
+mean_reliability    Mean joint reliability (visibility+presence) over detected frames
+recovery_rate       Fraction of detected frames where ≥1 tracker was in recovery mode
+unknown_rate        Fraction of detected frames where ≥1 tracker had stage=None
+aborted_reps        Total reps discarded by the lost-landmark abort logic
+rejected_reps       Total reps blocked by the min-duration gate
+signal_quality      Composite score: (1-dropout)·reliability·(1-recovery) ∈ [0,1]
 """
 
 from __future__ import annotations
@@ -88,7 +97,7 @@ def replay_video(video_path: str, exercise_key: str,
 
     from taharrak.exercises import EXERCISES
     from taharrak.tracker   import RepTracker, OneEuroLandmarkSmoother
-    from taharrak.analysis  import det_quality_ex
+    from taharrak.analysis  import det_quality_ex, joint_reliability
 
     if exercise_key not in EXERCISES:
         raise ValueError(
@@ -134,12 +143,22 @@ def replay_video(video_path: str, exercise_key: str,
         output_segmentation_masks     = False,
     )
 
+    # Key joints for reliability sampling (same fallback as TrackingGuard)
+    _key_idx = exercise.key_joints_right or exercise.joints_right
+    if exercise.bilateral:
+        _key_idx = _key_idx + (exercise.key_joints_left or exercise.joints_left)
+
     # Metric accumulators
     frames_total    = 0
     frames_detected = 0
     angle_history: list[list[float]] = [[] for _ in trackers]
     angle_deltas:  list[list[float]] = [[] for _ in trackers]
     prev_angles:   list[Optional[float]] = [None] * len(trackers)
+
+    # Robustness accumulators
+    reliability_sum  = 0.0
+    recovery_frames  = 0
+    unknown_frames   = 0
 
     wall_start = time.time()
     frame_idx  = 0
@@ -165,6 +184,14 @@ def replay_video(video_path: str, exercise_key: str,
 
             frames_detected += 1
             lm_smooth = smoother.smooth(result.pose_landmarks[0])
+
+            # Robustness: sample reliability and FSM state every detected frame
+            reliability_sum += sum(joint_reliability(lm_smooth[i])
+                                   for i in _key_idx) / len(_key_idx)
+            if any(tr._recovering for tr in trackers):
+                recovery_frames += 1
+            if any(tr.stage is None for tr in trackers):
+                unknown_frames  += 1
 
             l_q_raw, r_q_raw = det_quality_ex(lm_smooth, exercise, cfg)
             h, w = frame.shape[:2]
@@ -225,17 +252,32 @@ def replay_video(video_path: str, exercise_key: str,
         idx = max(0, int(len(s) * 0.95) - 1)
         return s[idx]
 
+    dropout_rate     = round(1.0 - frames_detected / max(frames_total, 1), 4)
+    mean_reliability = round(reliability_sum / max(frames_detected, 1), 4)
+    recovery_rate    = round(recovery_frames  / max(frames_detected, 1), 4)
+    unknown_rate     = round(unknown_frames   / max(frames_detected, 1), 4)
+
     metrics = {
         "video":            os.path.basename(video_path),
         "exercise":         exercise.name,
         "exercise_key":     exercise_key,
         "frames_total":     frames_total,
         "frames_detected":  frames_detected,
-        "dropout_rate":     round(1.0 - frames_detected / max(frames_total, 1), 4),
+        "dropout_rate":     dropout_rate,
         "angle_delta_mean": round(_mean(all_deltas), 3),
         "angle_delta_p95":  round(_p95(all_deltas), 3),
         "reps_total":       sum(tr.rep_count for tr in trackers),
         "fps_mean":         round(frames_total / elapsed, 1),
+        # ── robustness metrics ────────────────────────────────────────
+        "mean_reliability": mean_reliability,
+        "recovery_rate":    recovery_rate,
+        "unknown_rate":     unknown_rate,
+        "aborted_reps":     sum(tr.aborted_reps  for tr in trackers),
+        "rejected_reps":    sum(tr.rejected_reps for tr in trackers),
+        "signal_quality":   compute_signal_quality(dropout_rate,
+                                                    mean_reliability,
+                                                    recovery_rate),
+        "event_log":        [e for tr in trackers for e in tr.event_log],
     }
     if exercise.bilateral:
         metrics["reps_left"]  = trackers[0].rep_count
@@ -244,6 +286,29 @@ def replay_video(video_path: str, exercise_key: str,
         metrics["reps_center"] = trackers[0].rep_count
 
     return metrics
+
+
+# ── Signal quality formula ─────────────────────────────────────────────────────
+
+def compute_signal_quality(dropout_rate: float, mean_reliability: float,
+                            recovery_rate: float) -> float:
+    """
+    Composite signal-quality score in [0, 1].
+
+    Penalises three independent failure modes multiplicatively:
+      - dropout_rate    : fraction of frames with no pose detected
+      - mean_reliability: average joint reliability (low = occluded / missing)
+      - recovery_rate   : fraction of detected frames in post-loss recovery mode
+
+    Score = (1 - dropout) × reliability × (1 - recovery)
+
+    1.0 = perfect (no dropout, fully reliable, never in recovery)
+    0.0 = unusable signal
+    """
+    return round(
+        (1.0 - dropout_rate) * mean_reliability * (1.0 - recovery_rate),
+        4,
+    )
 
 
 # ── CLI helpers ────────────────────────────────────────────────────────────────
@@ -263,6 +328,13 @@ def _print_table(metrics: dict) -> None:
         print(f"    left          {metrics['reps_left']:>6}")
         print(f"    right         {metrics['reps_right']:>6}")
     print(f"  Throughput      {metrics['fps_mean']:>6.1f} fps")
+    print(f"  ── Robustness ──────────────────────────────")
+    print(f"  Mean reliability  {metrics['mean_reliability']:>6.3f}")
+    print(f"  Recovery rate     {metrics['recovery_rate']:>6.1%}")
+    print(f"  Unknown rate      {metrics['unknown_rate']:>6.1%}")
+    print(f"  Aborted reps    {metrics['aborted_reps']:>6}")
+    print(f"  Rejected reps   {metrics['rejected_reps']:>6}")
+    print(f"  Signal quality  {metrics['signal_quality']:>8.4f}")
     print(_BAR)
 
 

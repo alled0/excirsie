@@ -10,7 +10,7 @@ Run:  python -m pytest tests/ -v
 """
 import unittest
 
-from taharrak.analysis import analyze_camera_position, check_exercise_framing
+from taharrak.analysis import analyze_camera_position, build_msgs, check_exercise_framing
 from taharrak.exercises.bicep_curl import BICEP_CURL
 from taharrak.exercises.squat import SQUAT
 
@@ -207,6 +207,97 @@ class TestCheckExerciseFraming(unittest.TestCase):
         )
         lms = self._lms_with_vis({lm: 0.0 for lm in range(33)})  # all invisible
         self.assertEqual(check_exercise_framing(lms, ex_no_keys, self.CFG), [])
+
+
+# ── build_msgs semantic output tests ────────────────────────────────────────
+
+class _MockVoice:
+    """No-op voice stub."""
+    def say(self, *a, **kw):
+        pass
+
+
+class _StubTracker:
+    """Minimal tracker stub sufficient for build_msgs."""
+    def __init__(self, stage=None, rep_elapsed=0.0):
+        self.stage       = stage
+        self.rep_elapsed = rep_elapsed
+        self.side        = "right"
+
+
+_VALID_SEVERITIES = {"error", "warning", "ok"}
+_CFG_MSGS = {"min_rep_time": 1.2}
+
+
+class TestBuildMsgsSemantics(unittest.TestCase):
+    """build_msgs must return (str, severity_str) — no BGR colour tuples."""
+
+    def _call(self, trackers, angles, swings):
+        return build_msgs(trackers, angles, swings,
+                          BICEP_CURL, _MockVoice(), _CFG_MSGS, "en")
+
+    # -- contract: types -------------------------------------------------------
+
+    def test_returns_text_and_severity_string(self):
+        """Every message must be (str, severity_str) — not (str, BGR_tuple)."""
+        tr   = _StubTracker(stage="start", rep_elapsed=0.4)
+        msgs = self._call([tr], [165.0], [False])
+        for txt, sev in msgs:
+            self.assertIsInstance(txt, str)
+            self.assertIsInstance(sev, str)
+
+    def test_severity_values_are_valid(self):
+        """All severity strings must be one of the defined semantic values."""
+        tr   = _StubTracker(stage="start", rep_elapsed=0.4)
+        msgs = self._call([tr], [165.0], [True])
+        for _, sev in msgs:
+            self.assertIn(sev, _VALID_SEVERITIES,
+                          f"Unexpected severity: {sev!r}")
+
+    def test_no_bgr_tuples_in_severity(self):
+        """Severities must never be tuples (old colour values)."""
+        tr   = _StubTracker(stage="start", rep_elapsed=0.3)
+        msgs = self._call([tr], [165.0], [True])
+        for _, sev in msgs:
+            self.assertNotIsInstance(sev, tuple,
+                "Severity must be a string, not a BGR colour tuple")
+
+    # -- contract: severity mapping -------------------------------------------
+
+    def test_swinging_produces_error(self):
+        tr   = _StubTracker(stage="start")
+        msgs = self._call([tr], [165.0], [True])
+        severities = [sev for _, sev in msgs]
+        self.assertIn("error", severities)
+
+    def test_too_fast_rep_produces_error(self):
+        """rep_elapsed in (0, min_rep_time) → error."""
+        tr   = _StubTracker(stage="start", rep_elapsed=0.5)
+        msgs = self._call([tr], [165.0], [False])
+        severities = [sev for _, sev in msgs]
+        self.assertIn("error", severities)
+
+    def test_rom_guidance_produces_warning(self):
+        """Angle still near start threshold while in start stage → warning."""
+        # angle > angle_down - 12 = 148 triggers extend_fully
+        tr   = _StubTracker(stage="start")
+        msgs = self._call([tr], [BICEP_CURL.angle_down - 6], [False])
+        severities = [sev for _, sev in msgs]
+        self.assertIn("warning", severities)
+
+    def test_positive_hint_produces_ok(self):
+        """No issues at stage='end' → ok hint (lower_slowly cue)."""
+        tr   = _StubTracker(stage="end")
+        msgs = self._call([tr], [35.0], [False])
+        self.assertTrue(msgs, "Expected at least one hint message")
+        severities = [sev for _, sev in msgs]
+        self.assertIn("ok", severities)
+
+    def test_no_messages_when_no_stage(self):
+        """stage=None and no swing → empty list (nothing to hint at)."""
+        tr   = _StubTracker(stage=None)
+        msgs = self._call([tr], [90.0], [False])
+        self.assertEqual(msgs, [])
 
 
 if __name__ == "__main__":

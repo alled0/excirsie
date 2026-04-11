@@ -1,6 +1,7 @@
 """
 Pose analysis helpers for Taharrak.
 
+  joint_reliability     — combined visibility + presence score for one landmark
   det_quality_ex        — per-arm detection quality (GOOD / WEAK / LOST)
   analyze_camera_position — actionable camera setup feedback
   build_msgs            — real-time form feedback strings for the workout HUD
@@ -10,6 +11,26 @@ from taharrak.exercises.base import Exercise
 from taharrak.messages import t
 
 
+# ── Joint reliability ─────────────────────────────────────────────────────────
+
+def joint_reliability(lm) -> float:
+    """
+    Combined reliability score in [0, 1] for a single landmark.
+
+    When MediaPipe exposes both ``visibility`` (occlusion likelihood) and
+    ``presence`` (likelihood the landmark is inside the frame), we take the
+    minimum: both must be high for the joint to be considered reliable.
+
+    Falls back to ``visibility`` alone when ``presence`` is absent (e.g. when
+    landmarks come from an older pose model or a hand-crafted test fixture).
+    This ensures backward compatibility with any code that only sets
+    ``visibility``.
+    """
+    vis  = getattr(lm, 'visibility', 1.0)
+    pres = getattr(lm, 'presence',   None)
+    return vis if pres is None else min(vis, pres)
+
+
 # ── Detection quality ─────────────────────────────────────────────────────────
 
 def det_quality_ex(lm, exercise: Exercise, cfg: dict) -> tuple:
@@ -17,9 +38,9 @@ def det_quality_ex(lm, exercise: Exercise, cfg: dict) -> tuple:
     VG, VW = cfg.get("vis_good", 0.68), cfg.get("vis_weak", 0.38)
 
     def _q(indices):
-        vis = [lm[i].visibility for i in indices]
-        if all(v > VG for v in vis): return "GOOD"
-        if all(v > VW for v in vis): return "WEAK"
+        rel = [joint_reliability(lm[i]) for i in indices]
+        if all(r > VG for r in rel): return "GOOD"
+        if all(r > VW for r in rel): return "WEAK"
         return "LOST"
 
     return _q(exercise.joints_left), _q(exercise.joints_right)
@@ -44,8 +65,8 @@ def analyze_camera_position(lm) -> list:
     l_sh = lm[11]   # left  shoulder (MediaPipe landmark 11)
     r_sh = lm[12]   # right shoulder (MediaPipe landmark 12)
 
-    # -- Visibility: if key landmarks are mostly invisible, lighting is bad
-    key_vis = [lm[i].visibility for i in (0, 11, 12, 23, 24)]
+    # -- Reliability: if key landmarks are mostly invisible/absent, lighting is bad
+    key_vis = [joint_reliability(lm[i]) for i in (0, 11, 12, 23, 24)]
     if sum(key_vis) / len(key_vis) < 0.35:
         issues.append("cam_poor_vis")
         return issues   # can't judge geometry — stop here
@@ -98,12 +119,14 @@ def check_exercise_framing(lm, exercise: Exercise, cfg: dict) -> list:
     issues = []
 
     if exercise.bilateral and exercise.key_joints_left:
-        hidden_l = [i for i in exercise.key_joints_left if lm[i].visibility < VG]
+        hidden_l = [i for i in exercise.key_joints_left
+                    if joint_reliability(lm[i]) < VG]
         if hidden_l:
             issues.append("joint_hidden")
 
     if exercise.key_joints_right:
-        hidden_r = [i for i in exercise.key_joints_right if lm[i].visibility < VG]
+        hidden_r = [i for i in exercise.key_joints_right
+                    if joint_reliability(lm[i]) < VG]
         if hidden_r and "joint_hidden" not in issues:
             issues.append("joint_hidden")
 
@@ -119,11 +142,13 @@ def build_msgs(trackers: list, angles: list, swings: list,
                exercise: Exercise, voice, cfg: dict, lang: str) -> list:
     """
     Build real-time form feedback message list for the workout HUD.
-    Returns list of (text, colour) tuples.
-    Late-import of ui colours to avoid circular imports.
-    """
-    from taharrak.ui import RED, ORANGE, GREEN  # noqa: PLC0415
+    Returns list of (text, severity) tuples where severity is one of:
+      "error"   — must-fix issue (swinging, too fast)
+      "warning" — ROM / form nudge
+      "ok"      — positive cue / no issue
 
+    The UI layer maps severity → colour via ui.severity_color().
+    """
     msgs      = []
     sides_ln  = [t(lang, "left"), t(lang, "right")]
 
@@ -132,7 +157,7 @@ def build_msgs(trackers: list, angles: list, swings: list,
         side_ln = sides_ln[i]  if i < 2 else ""
 
         if swinging:
-            msgs.append((f"  {t(lang, 'swing_warn', side=side_ln)}", RED))
+            msgs.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error"))
             voice.say(f"Stop swinging your {side_en.lower()} side", 4.0)
 
         if angle is None:
@@ -140,17 +165,17 @@ def build_msgs(trackers: list, angles: list, swings: list,
 
         if not exercise.invert:
             if tracker.stage == "start" and angle > exercise.angle_down - 12:
-                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", ORANGE))
+                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
             elif tracker.stage == "end" and angle > exercise.angle_up + 15:
-                msgs.append((f"  {t(lang, 'curl_fully', side=side_ln)}", ORANGE))
+                msgs.append((f"  {t(lang, 'curl_fully', side=side_ln)}", "warning"))
         else:
             if tracker.stage == "start" and angle > exercise.angle_down + 15:
-                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", ORANGE))
+                msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
             elif tracker.stage == "end" and angle < exercise.angle_up - 15:
-                msgs.append((f"  {t(lang, 'press_up', side=side_ln)}", ORANGE))
+                msgs.append((f"  {t(lang, 'press_up', side=side_ln)}", "warning"))
 
         if 0 < tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
-            msgs.append((f"  {t(lang, 'slow_down', side=side_ln)}", RED))
+            msgs.append((f"  {t(lang, 'slow_down', side=side_ln)}", "error"))
             voice.say("Slow down", 5.0)
 
     if not msgs:
@@ -162,6 +187,6 @@ def build_msgs(trackers: list, angles: list, swings: list,
             elif tracker.stage == "start":
                 hints.append(t(lang, "curl_up", side=side_ln))
         if hints:
-            msgs.append(("  " + "   ·   ".join(hints), GREEN))
+            msgs.append(("  " + "   ·   ".join(hints), "ok"))
 
     return msgs

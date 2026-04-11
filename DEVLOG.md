@@ -26,7 +26,8 @@ database.
 | `60e5d2c` | 2026-04-02 | Initial commit — full working prototype |
 | `80f3479` | 2026-04-02 | Add `.gitignore` |
 | `33e6a1d` | 2026-04-11 | Refactor + 3 pose-analysis improvements |
-| *(next)*  | 2026-04-11 | Phase 1 — robustness + evaluation improvements |
+| `*(Phase 1)*` | 2026-04-11 | Phase 1 — robustness + evaluation improvements |
+| *(next)*  | 2026-04-11 | Phase 1.1 — reliability, re-acquisition, eval expansion & semantic cleanup |
 
 ---
 
@@ -512,6 +513,210 @@ One Euro filter sees a realistic 33ms dt instead of sub-millisecond test time.
 | `tests/test_camera_gate.py` | NEW — 16 tests |
 | `config.json` | + 5 new keys |
 | `bicep_curl_counter.py` | Updated imports; `OneEuroLandmarkSmoother` instantiation; `check_exercise_framing` wired in calibration |
+
+---
+
+## Phase 1.1 — Reliability, Re-acquisition, Eval Expansion & Semantic Cleanup (2026-04-11)
+
+**Goal:** Strengthen robustness, recovery behaviour, evaluation quality, and
+separation of concerns before starting Phase 2 feature work.  Five targeted
+improvements, all backward-compatible, with a comprehensive unit-test expansion.
+
+---
+
+### 1. Visibility + Presence Joint Reliability Scoring
+
+**Problem:** MediaPipe's newer pose models expose two per-landmark confidence
+signals: `visibility` (occlusion likelihood) and `presence` (whether the joint
+is inside the frame at all).  The codebase only checked `visibility`, so a joint
+that was clearly visible but partially outside the frame could be treated as
+reliable when it wasn't.
+
+**Solution:** New `joint_reliability(lm) → float` function in
+`taharrak/analysis.py`:
+
+```python
+def joint_reliability(lm) -> float:
+    vis  = getattr(lm, 'visibility', 1.0)
+    pres = getattr(lm, 'presence',   None)
+    return vis if pres is None else min(vis, pres)
+```
+
+Both signals must be high — `min()` is the conservative combinator.  Falls back
+to `visibility` alone when `presence` is absent (older models, test fixtures).
+
+`SmoothedLandmark` gained a `presence` field (default `1.0`); `OneEuroLandmarkSmoother`
+passes through `getattr(lm, 'presence', 1.0)` so smoothed landmarks carry the
+signal without breaking existing callers.
+
+`joint_reliability` is now used in `det_quality_ex`, `check_exercise_framing`,
+`analyze_camera_position`, and the `TrackingGuard` — everywhere a single
+reliability scalar was needed.
+
+---
+
+### 2. ROI / Tracking Re-acquisition (TrackingGuard)
+
+**Problem:** The per-arm FSMs handled individual landmark drops well, but had no
+system-level view.  A person momentarily leaving frame, a large camera move, or
+repeated recovery cycles could leave the tracker in an inconsistent state with
+no mechanism to force a clean restart.
+
+**Solution:** New `TrackingGuard` class in `taharrak/tracker.py`, sitting above
+the per-arm `RepTracker` instances.  Called once per WORKOUT frame (only when
+pose is detected).  Returns `True` when tracking quality has degraded enough to
+warrant a full FSM/filter reset.
+
+Four independent triggers:
+
+| Trigger | Condition | Config key |
+|---------|-----------|------------|
+| Low reliability | Mean key-joint reliability < `vis_weak` for N consecutive frames | `guard_max_low_rel_frames` (default 20) |
+| Bbox centroid jump | Skeleton centre moves > threshold in one frame | `guard_bbox_jump` (default 0.25) |
+| Scale jump | Shoulder span changes > threshold relatively in one frame | `guard_scale_jump` (default 0.30) |
+| Recovery frequency | ≥ N recovery-mode entries within a sliding time window | `guard_recovery_window` (5 s), `guard_max_recoveries` (4) |
+
+When fired: `tr.reset_tracking()` on every tracker + `lm_smoother.reset()` +
+`guard.reset()`.
+
+**`reset_tracking()` vs `reset_set()`:** The soft reset clears per-rep FSM state
+and all filters, but preserves `rep_count`, `aborted_reps`, and `rejected_reps`
+so the set's accumulated stats are not lost.
+
+**Config keys added:**
+```json
+"guard_max_low_rel_frames": 20,
+"guard_bbox_jump":          0.25,
+"guard_scale_jump":         0.30,
+"guard_recovery_window":    5.0,
+"guard_max_recoveries":     4
+```
+
+---
+
+### 3. Eval Harness Expansion
+
+**Problem:** The existing `taharrak/eval.py` harness reported basic frame-level
+and rep-counting metrics, but nothing about recovery behaviour, signal quality,
+or why reps were not counted — making it hard to compare configurations or
+diagnose problem clips.
+
+**Solution:** Six new metrics added to `replay_video()` output (all
+backward-compatible — existing keys unchanged):
+
+| Metric | Description |
+|--------|-------------|
+| `mean_reliability` | Mean key-joint reliability over detected frames |
+| `recovery_rate` | Fraction of detected frames where ≥ 1 tracker was in recovery mode |
+| `unknown_rate` | Fraction of detected frames where ≥ 1 tracker had `stage=None` |
+| `aborted_reps` | Total reps discarded by the lost-landmark abort gate |
+| `rejected_reps` | Total reps blocked by the min-duration gate |
+| `signal_quality` | Composite: `(1−dropout) × reliability × (1−recovery)` ∈ [0, 1] |
+| `event_log` | Full list of structured non-completion events (see §4) |
+
+`compute_signal_quality(dropout, reliability, recovery)` is exported at module
+level so it can be unit-tested and reused by other consumers.
+
+---
+
+### 4. Rep Abort / Reject Reason Logging
+
+**Problem:** When a rep was discarded (by abort, min-duration gate, or tracking
+reset) there was no record of why.  Debugging required manually tracing
+counter increments; coaching and analytics had nothing to work with.
+
+**Solution:** `RepTracker` now maintains an `event_log: list` of structured
+non-completion events.  Each entry is a dict:
+
+```python
+{
+    "timestamp":  "2026-04-11T...",
+    "side":       "right",
+    "set_num":    1,
+    "category":   "lost_visibility",   # see table below
+    # + category-specific context fields
+}
+```
+
+Four categories are emitted from existing decision points:
+
+| Category | Where fired | Key context fields |
+|----------|------------|-------------------|
+| `lost_visibility` | `_abort_rep()` | `consecutive_lost`, `elapsed_s`, `min_angle`, `max_angle` |
+| `below_min_duration` | `update()` rejection branch | `duration_s`, `min_rep_time` |
+| `recovery_interrupted` | `update_quality()` when recovery starts while `_in_rep` | `consecutive_lost` |
+| `tracking_reset` | `reset_tracking()` when `_in_rep` | `min_angle`, `max_angle`, `elapsed_s` |
+
+**Lifecycle:** `event_log` survives `reset_tracking()` (soft reset preserves
+accumulated stats) and is cleared by `reset_set()` (hard reset).
+
+**Accessor:** `tr.all_event_logs()` — mirrors `tr.all_rep_logs()`.
+
+`taharrak/session.py` gained `save_events_csv(trackers)` to export event logs
+alongside rep logs.  `eval.py`'s `replay_video()` output includes `event_log`
+for post-session analysis.
+
+---
+
+### 5. Semantic Analysis / UI Separation
+
+**Problem:** `build_msgs()` in `taharrak/analysis.py` imported BGR colour
+constants (`RED`, `ORANGE`, `GREEN`) from `taharrak/ui.py` and returned
+`(text, colour_tuple)` pairs.  Analysis was coupled to a rendering detail it
+had no business knowing about — and the late import was added specifically to
+avoid the resulting circular dependency.
+
+**Solution:** The smallest change that achieves the separation:
+
+- `build_msgs` now returns `(text, severity)` tuples where `severity` ∈
+  `{"error", "warning", "ok"}`.
+- The mapping `severity → BGR colour` lives in `ui.py` as the new
+  `severity_color(s: str) → tuple` function.
+- `_feedback_strip` calls `severity_color(severity)` at render time.
+- The `from taharrak.ui import ...` inside `build_msgs` is gone.
+
+No callers needed changes.  The severity strings are stable keys, making
+`build_msgs` output testable without any OpenCV dependency.
+
+---
+
+### Tests
+
+130 tests total, all green.  Phase 1.1 added 77 new tests across five files:
+
+| File | New tests | What they cover |
+|------|-----------|----------------|
+| `tests/test_gating.py` | +26 | `joint_reliability` combined scoring; `det_quality_ex` with presence; `TrackingGuard` all 4 triggers + reset; `reset_tracking` behaviour |
+| `tests/test_eval_metrics.py` | NEW (20) | `aborted_reps` counter; `rejected_reps` once-per-crossing guarantee; `compute_signal_quality` boundary + multiplicative formula; `reset_set` / `reset_tracking` counter lifecycle |
+| `tests/test_reason_logging.py` | NEW (23) | All 4 event categories; correct context fields; `event_log` cleared by `reset_set`, preserved by `reset_tracking`; no events on clean rep |
+| `tests/test_camera_gate.py` | +8 | `build_msgs` semantic outputs: severity strings not BGR tuples; correct severity per condition |
+
+**Test design notes:**
+- `rejected_reps` and `below_min_duration` event tests use dt injection
+  (`tr._last_upd_t = time.time() - 1/30`) combined with a preserved
+  `_rep_start` timestamp to drive the One Euro filter to the end threshold
+  while keeping rep duration artificially short.
+- `recovery_interrupted` and `tracking_reset` event tests exercise specific
+  in-progress-rep lifecycle paths and verify mutual exclusivity with
+  `lost_visibility`.
+
+---
+
+### Files Changed in Phase 1.1
+
+| File | Change |
+|------|--------|
+| `taharrak/tracker.py` | + `SmoothedLandmark.presence`; `OneEuroLandmarkSmoother` passes `presence`; `RepTracker`: `aborted_reps`, `rejected_reps`, `_min_dur_blocked`, `event_log`, `_log_event()`, `all_event_logs()`, `reset_tracking()`; + `TrackingGuard` class |
+| `taharrak/analysis.py` | + `joint_reliability()`; `det_quality_ex`, `check_exercise_framing`, `analyze_camera_position` use it; `build_msgs` returns `(text, severity)` — no more UI import |
+| `taharrak/ui.py` | + `severity_color()`; `_feedback_strip` calls it |
+| `taharrak/eval.py` | + `compute_signal_quality()`; 7 new keys in `replay_video()` output including `event_log` |
+| `taharrak/session.py` | + `save_events_csv()` |
+| `config.json` | + 5 `guard_*` keys |
+| `bicep_curl_counter.py` | + `TrackingGuard` instantiation + per-frame call in WORKOUT loop |
+| `tests/test_gating.py` | + `TestJointReliability`, `TestDetQualityExWithPresence`, `TestTrackingGuard` (26 new tests) |
+| `tests/test_eval_metrics.py` | NEW — 20 tests |
+| `tests/test_reason_logging.py` | NEW — 23 tests |
+| `tests/test_camera_gate.py` | + `TestBuildMsgsSemantics` (8 new tests) |
 
 ---
 
