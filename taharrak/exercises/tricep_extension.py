@@ -1,5 +1,24 @@
 """Tricep Extension — overhead or cable extension, both arms tracked independently."""
-from .base import Exercise, LS, LE, LW, RS, RE, RW
+from .base import Exercise, TechniqueProfile, LS, LE, LW, RS, RE, RW
+
+_TECHNIQUE = TechniqueProfile(
+    preferred_view="side_or_slight_angle",
+    primary_signal="elbow_extension_angle",
+    secondary_signals=("elbow_flare", "shoulder_drift"),
+    start_thresholds={"elbow_angle_deg": (65.0, 90.0)},
+    end_thresholds={"elbow_angle_deg": (150.0, 170.0)},
+    top_faults=("elbow_flare", "shoulder_drift", "incomplete_extension"),
+    coaching_cues=(
+        "keep_elbows_in",
+        "move_only_forearms",
+        "finish_extension",
+        "keep_shoulders_still",
+    ),
+    confidence_requirements={
+        "primary_signal": "GOOD",
+        "secondary_signals": "WEAK_OR_BETTER",
+    },
+)
 
 TRICEP_EXTENSION = Exercise(
     name              = "Tricep Extension",
@@ -21,4 +40,5 @@ TRICEP_EXTENSION = Exercise(
     arc_joint_idx     = 1,       # arc gauge on elbow
     key_joints_left   = (LE, LW),  # elbow + wrist must be visible
     key_joints_right  = (RE, RW),
+    technique_profile = _TECHNIQUE,
 )

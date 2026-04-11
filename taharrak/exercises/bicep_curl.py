@@ -1,5 +1,24 @@
 """Bicep Curl — standing dumbbell curl, both arms tracked independently."""
-from .base import Exercise, LS, LE, LW, RS, RE, RW
+from .base import Exercise, TechniqueProfile, LS, LE, LW, RS, RE, RW
+
+_TECHNIQUE = TechniqueProfile(
+    preferred_view="front",
+    primary_signal="elbow_flexion_angle",
+    secondary_signals=("upper_arm_drift", "trunk_swing"),
+    start_thresholds={"elbow_angle_deg": (150.0, 165.0)},
+    end_thresholds={"elbow_angle_deg": (55.0, 75.0)},
+    top_faults=("upper_arm_drift", "trunk_swing", "incomplete_rom"),
+    coaching_cues=(
+        "keep_upper_arm_still",
+        "dont_swing_body",
+        "curl_higher",
+        "lower_with_control",
+    ),
+    confidence_requirements={
+        "primary_signal": "GOOD",
+        "secondary_signals": "WEAK_OR_BETTER",
+    },
+)
 
 BICEP_CURL = Exercise(
     name              = "Bicep Curl",
@@ -21,4 +40,5 @@ BICEP_CURL = Exercise(
     arc_joint_idx     = 1,       # arc gauge on elbow
     key_joints_left   = (LE, LW),  # elbow + wrist must be visible
     key_joints_right  = (RE, RW),
+    technique_profile = _TECHNIQUE,
 )

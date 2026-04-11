@@ -355,8 +355,17 @@ class RepTracker:
         self._rep_min_a     = 180.0
         self._rep_max_a     = 0.0
         self._swing_frames  = 0
+        self._fault_frames  = Counter()
         self._in_rep        = False
         self.rep_elapsed    = 0.0
+        self.technique_state = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_score_components = {
+            "rom": 0,
+            "tempo": 0,
+            "sway_drift": 0,
+            "asymmetry": 0,
+            "instability": 0,
+        }
 
         # Per-set robustness counters (used by eval harness + coaching)
         self.aborted_reps      = 0   # reps discarded by _abort_rep()
@@ -394,6 +403,9 @@ class RepTracker:
         p = (p_lm.x * w, p_lm.y * h)
         v = (v_lm.x * w, v_lm.y * h)
         d = (d_lm.x * w, d_lm.y * h)
+        p_n = (p_lm.x, p_lm.y)
+        v_n = (v_lm.x, v_lm.y)
+        d_n = (d_lm.x, d_lm.y)
 
         # One Euro filtered angle (replaces 5-frame mean buffer)
         now = time.time() if now is None else now
@@ -466,7 +478,86 @@ class RepTracker:
             if swinging:
                 self._swing_frames += 1
 
+        self._update_technique_state(angle, p_n, v_n, d_n, swinging)
+
         return angle, swinging, rep_done, score
+
+    def _profile_angle_ranges(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        profile = self.exercise.technique_profile
+
+        def _range(thresholds: dict, fallback: float) -> tuple[float, float]:
+            for key in ("elbow_angle_deg", "shoulder_abduction_deg", "knee_angle_deg"):
+                value = thresholds.get(key)
+                if isinstance(value, tuple) and len(value) == 2:
+                    return float(value[0]), float(value[1])
+            return float(fallback), float(fallback)
+
+        if profile is None:
+            return (
+                (float(self.exercise.angle_down), float(self.exercise.angle_down)),
+                (float(self.exercise.angle_up), float(self.exercise.angle_up)),
+            )
+        return (
+            _range(profile.start_thresholds, self.exercise.angle_down),
+            _range(profile.end_thresholds, self.exercise.angle_up),
+        )
+
+    def _update_technique_state(self, angle: float,
+                                p_n: tuple[float, float],
+                                v_n: tuple[float, float],
+                                d_n: tuple[float, float],
+                                swinging: bool) -> None:
+        start_range, end_range = self._profile_angle_ranges()
+        faults = []
+        signals = {
+            "angle": round(angle, 2),
+            "start_range": start_range,
+            "end_range": end_range,
+        }
+        key = self.exercise.key
+
+        if key == "1":
+            drift = abs(v_n[0] - p_n[0])
+            signals["upper_arm_drift"] = round(drift, 4)
+            if drift > 0.08:
+                faults.append("upper_arm_drift")
+            if swinging:
+                faults.append("trunk_swing")
+            if self.stage == "start" and self.rep_elapsed > 0.35 and angle > end_range[1]:
+                faults.append("incomplete_rom")
+        elif key == "2":
+            offset = abs(d_n[0] - v_n[0])
+            signals["wrist_elbow_offset"] = round(offset, 4)
+            if offset > 0.10:
+                faults.append("wrist_elbow_misstacking")
+            if swinging:
+                faults.append("excessive_lean_back")
+            if self.stage == "start" and self.rep_elapsed > 0.35 and angle < end_range[0]:
+                faults.append("incomplete_lockout")
+        elif key == "3":
+            if self.stage == "start" and self.rep_elapsed > 0.35 and angle > end_range[1] + 5.0:
+                faults.append("raising_too_high")
+        elif key == "4":
+            offset = abs(d_n[0] - v_n[0])
+            signals["wrist_elbow_offset"] = round(offset, 4)
+            if offset > 0.10:
+                faults.append("elbow_flare")
+            if self.stage == "start" and self.rep_elapsed > 0.35 and angle < end_range[0]:
+                faults.append("incomplete_extension")
+        elif key == "5":
+            if self.stage == "start" and self.rep_elapsed > 0.45 and angle > end_range[1]:
+                faults.append("insufficient_depth")
+
+        faults = tuple(dict.fromkeys(faults))
+        self.technique_state = {
+            "faults": faults,
+            "signals": signals,
+            "view": self.exercise.technique_profile.preferred_view
+                    if self.exercise.technique_profile else "unknown",
+        }
+        if self._in_rep:
+            for fault in faults:
+                self._fault_frames[fault] += 1
 
     def _begin_rep(self, now: float | None = None) -> None:
         self.stage             = "start"
@@ -475,6 +566,7 @@ class RepTracker:
         self._rep_min_a        = 180.0
         self._rep_max_a        = 0.0
         self._swing_frames     = 0
+        self._fault_frames.clear()
         self._in_rep           = True
         self._min_dur_blocked  = False
 
@@ -495,6 +587,7 @@ class RepTracker:
         self._rep_min_a        = 180.0
         self._rep_max_a        = 0.0
         self._swing_frames     = 0
+        self._fault_frames.clear()
         self.stage             = None   # unknown — wait for clear start position
         self.rep_elapsed       = 0.0
         self._min_dur_blocked  = False
@@ -513,45 +606,77 @@ class RepTracker:
             "set_num":     self.current_set,
             "rep_num":     self.rep_count,
             "score":       score,
+            "score_components": dict(self.last_score_components),
             "duration_s":  round((end_t - self._rep_start) if self._rep_start else 0, 2),
             "min_angle":   round(self._rep_min_a, 1),
             "max_angle":   round(self._rep_max_a, 1),
             "swing_frames": self._swing_frames,
+            "fault_frames": dict(self._fault_frames),
         })
         self._in_rep    = False
         self._rep_start = None
         self.rep_elapsed = 0.0
 
-    def _score(self, duration: float, warmup_mode: bool) -> int:
+    def _build_score_breakdown(self, duration: float, warmup_mode: bool) -> dict:
         ex  = self.exercise
-        tol = ex.rom_tolerance
-        s   = 100
+        start_range, end_range = self._profile_angle_ranges()
 
         if not ex.invert:
-            start_deficit = max(0, (ex.angle_down - tol) - self._rep_max_a)
-            end_deficit   = max(0, self._rep_min_a - (ex.angle_up + tol))
+            start_deficit = max(0, start_range[0] - self._rep_max_a)
+            end_deficit   = max(0, self._rep_min_a - end_range[1])
         else:
-            start_deficit = max(0, self._rep_min_a - (ex.angle_down + tol))
-            end_deficit   = max(0, (ex.angle_up - tol) - self._rep_max_a)
+            start_deficit = max(0, self._rep_min_a - start_range[1])
+            end_deficit   = max(0, end_range[0] - self._rep_max_a)
 
-        s -= min(int(start_deficit * 0.8), 25)
-        s -= min(int(end_deficit   * 0.8), 25)
+        rom_penalty = (
+            min(int(start_deficit * 0.8), 25) +
+            min(int(end_deficit   * 0.8), 25)
+        )
 
+        swing_penalty = 0
         if self._swing_frames >= 3:
-            s -= 30
+            swing_penalty = 30
         elif self._swing_frames >= 1:
-            s -= 15
+            swing_penalty = 15
 
+        drift_penalty = 0
+        for fault in ("upper_arm_drift", "wrist_elbow_misstacking", "elbow_flare", "raising_too_high"):
+            if self._fault_frames.get(fault, 0) >= 3:
+                drift_penalty += 10
+        drift_penalty = min(drift_penalty, 20)
+
+        tempo_penalty = 0
         if duration < ex.min_rep_time:
-            s -= 20
+            tempo_penalty = 20
         elif duration < ex.ideal_rep_time * 0.6:
-            s -= 10
+            tempo_penalty = 10
+
+        breakdown = {
+            "rom": rom_penalty,
+            "tempo": tempo_penalty,
+            "sway_drift": swing_penalty + drift_penalty,
+            "asymmetry": 0,
+            "instability": 0,
+        }
+        score = max(0, min(100, 100 - sum(breakdown.values())))
 
         if warmup_mode:
-            penalty = 100 - s
-            s       = 100 - (penalty // 2)
+            penalty = 100 - score
+            score   = 100 - (penalty // 2)
 
-        return max(0, min(100, s))
+        breakdown["score"] = max(0, min(100, score))
+        return breakdown
+
+    def _score(self, duration: float, warmup_mode: bool) -> int:
+        breakdown = self._build_score_breakdown(duration, warmup_mode)
+        self.last_score_components = {
+            "rom": breakdown["rom"],
+            "tempo": breakdown["tempo"],
+            "sway_drift": breakdown["sway_drift"],
+            "asymmetry": breakdown["asymmetry"],
+            "instability": breakdown["instability"],
+        }
+        return breakdown["score"]
 
     def _log_event(self, category: str, **ctx) -> None:
         """Append a structured non-completion event to event_log."""
@@ -622,9 +747,18 @@ class RepTracker:
         self._rep_min_a       = 180.0
         self._rep_max_a       = 0.0
         self._swing_frames    = 0
+        self._fault_frames.clear()
         self.rep_elapsed      = 0.0
         self._last_upd_t      = 0.0
         self._min_dur_blocked = False
+        self.technique_state  = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_score_components = {
+            "rom": 0,
+            "tempo": 0,
+            "sway_drift": 0,
+            "asymmetry": 0,
+            "instability": 0,
+        }
         self.aborted_reps     = 0
         self.rejected_reps    = 0
         self.event_log        = []
@@ -651,11 +785,20 @@ class RepTracker:
         self._rep_min_a       = 180.0
         self._rep_max_a       = 0.0
         self._swing_frames    = 0
+        self._fault_frames.clear()
         self._sh_y_hist.clear()
         self.stage            = None
         self.rep_elapsed      = 0.0
         self._last_upd_t      = 0.0
         self._min_dur_blocked = False
+        self.technique_state  = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_score_components = {
+            "rom": 0,
+            "tempo": 0,
+            "sway_drift": 0,
+            "asymmetry": 0,
+            "instability": 0,
+        }
         self._angle_filter.reset()
         self._consecutive_good = 0
         self._consecutive_lost = 0

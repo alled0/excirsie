@@ -916,3 +916,136 @@ Use this quick checklist before Phase 2 work:
   Expected: subject isolation looks cleaner; counting/coaching behaviour should stay the same.
 - Segmentation off
   Expected: easier baseline for A/B testing; compare stability, latency, and visual quality against segmentation on.
+
+---
+
+## Phase 2 — Technique Rules v1 (2026-04-12)
+
+**Goal:** Introduce structured, exercise-specific technique rules into runtime
+analysis and scoring while preserving the existing rep FSM and live trust-gate
+architecture.
+
+### 1. Profile System Added
+
+Added a small `TechniqueProfile` dataclass in `taharrak/exercises/base.py` and
+attached it to `Exercise` as `technique_profile`.
+
+Each profile carries:
+
+- `preferred_view`
+- `primary_signal`
+- `secondary_signals`
+- `start_thresholds`
+- `end_thresholds`
+- `top_faults`
+- `coaching_cues`
+- `confidence_requirements`
+
+The five supported exercises now define their own Technique Rules v1 profile
+directly in their exercise file:
+
+- Bicep Curl
+- Shoulder Press
+- Lateral Raise
+- Tricep Extension
+- Squat
+
+This keeps the data layer explicit and readable, and gives the runtime a stable
+exercise-specific rules source without broad architectural change.
+
+### 2. Message Keys Added
+
+Added the new cue keys required by Technique Rules v1 to `taharrak/messages.py`
+in both English and Arabic.
+
+Examples:
+
+- `keep_upper_arm_still`
+- `dont_lean_back`
+- `lead_with_elbows`
+- `keep_elbows_in`
+- `sit_deeper`
+
+These keys now back the profile-driven feedback layer and keep cue wording
+localized in both English and Arabic.
+
+### 3. Profile-Driven Analysis and Scoring Integration
+
+This pass wires the new technique profiles into the existing rule-based runtime
+without changing the rep FSM or the live trust gate.
+
+In `taharrak/tracker.py`:
+
+- rep scoring now reads ROM targets from each exercise profile instead of only
+  `angle_down` / `angle_up`
+- each rep keeps an explainable score breakdown with:
+  - `rom`
+  - `tempo`
+  - `sway_drift`
+  - `asymmetry`
+  - `instability`
+- a lightweight `technique_state` is updated live and stores:
+  - active faults
+  - measured signals
+  - profile view metadata
+- per-rep logs now include `score_components` and `fault_frames`
+
+In `taharrak/analysis.py`:
+
+- feedback selection now reads `exercise.technique_profile`
+- fault priority follows each profile's `top_faults`
+- coaching text now prefers the profile cue keys instead of generic hardcoded
+  form strings where a profile rule exists
+- feedback remains conservative:
+  - trust gating still suppresses coaching under weak live confidence
+  - quality checks still suppress secondary-signal coaching when the profile
+    requires stronger confidence
+  - only the mapped representative faults are coached, so unimplemented /
+    weak-view faults are not over-claimed
+
+### 4. High-Level Technique Logic Per Exercise
+
+- **Bicep Curl:** uses elbow-flexion ROM bands from the profile; detects upper-arm drift, trunk swing, and incomplete curl depth; cues include `keep_upper_arm_still`, `dont_swing_body`, and `curl_higher`
+- **Shoulder Press:** uses extension lockout ranges from the profile; detects lean-back, incomplete lockout, and wrist/elbow misstacking; cues include `dont_lean_back`, `finish_overhead`, and `stack_wrists_over_elbows`
+- **Lateral Raise:** uses shoulder-abduction end range from the profile; detects raising too high as the representative live rule; cue uses `raise_to_shoulder_height`
+- **Tricep Extension:** uses elbow-extension finish range from the profile; detects elbow flare and incomplete extension; cues include `keep_elbows_in` and `finish_extension`
+- **Squat:** uses knee-angle depth ranges from the profile; detects insufficient depth as the representative live rule; cue uses `sit_deeper`
+
+### 5. Tests
+
+Added focused coverage for:
+
+- per-exercise technique profile presence
+- expected profile fields for all 5 exercises
+- cue-key existence in EN and AR message tables
+- profile-threshold-driven ROM scoring
+- one representative fault detection path per supported exercise
+- cue selection from technique profiles
+- conservative suppression of weak-quality / unmapped faults
+
+Current test status:
+
+```bash
+python -m unittest discover tests
+```
+
+Result:
+- `Ran 163 tests`
+- `OK`
+
+### Files Changed in Phase 2
+
+| File | Change |
+|------|--------|
+| `taharrak/exercises/base.py` | Added `TechniqueProfile` and attached it to `Exercise` |
+| `taharrak/exercises/bicep_curl.py` | Added Bicep Curl Technique Rules v1 profile |
+| `taharrak/exercises/shoulder_press.py` | Added Shoulder Press Technique Rules v1 profile |
+| `taharrak/exercises/lateral_raise.py` | Added Lateral Raise Technique Rules v1 profile |
+| `taharrak/exercises/tricep_extension.py` | Added Tricep Extension Technique Rules v1 profile |
+| `taharrak/exercises/squat.py` | Added Squat Technique Rules v1 profile |
+| `taharrak/exercises/__init__.py` | Re-exported `TechniqueProfile` |
+| `taharrak/messages.py` | Added EN/AR cue keys for Technique Rules v1 |
+| `taharrak/tracker.py` | Wired technique profiles into ROM scoring, explainable score components, and live fault state |
+| `taharrak/analysis.py` | Added profile-driven feedback selection with quality-aware suppression |
+| `tests/test_technique_profiles.py` | Added focused profile/message coverage |
+| `tests/test_technique_runtime.py` | Added runtime coverage for scoring, faults, cue selection, and suppression |

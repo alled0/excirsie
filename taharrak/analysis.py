@@ -11,6 +11,39 @@ from taharrak.exercises.base import Exercise
 from taharrak.messages import t
 
 
+_FAULT_RULES = {
+    "1": {
+        "upper_arm_drift": ("keep_upper_arm_still", "warning", "secondary_signals"),
+        "trunk_swing": ("dont_swing_body", "error", "secondary_signals"),
+        "incomplete_rom": ("curl_higher", "warning", "primary_signal"),
+    },
+    "2": {
+        "excessive_lean_back": ("dont_lean_back", "error", "secondary_signals"),
+        "incomplete_lockout": ("finish_overhead", "warning", "primary_signal"),
+        "wrist_elbow_misstacking": ("stack_wrists_over_elbows", "warning", "secondary_signals"),
+    },
+    "3": {
+        "raising_too_high": ("raise_to_shoulder_height", "warning", "primary_signal"),
+    },
+    "4": {
+        "elbow_flare": ("keep_elbows_in", "warning", "secondary_signals"),
+        "incomplete_extension": ("finish_extension", "warning", "primary_signal"),
+    },
+    "5": {
+        "insufficient_depth": ("sit_deeper", "warning", "primary_signal"),
+        "excessive_forward_lean": ("chest_up", "warning", "secondary_signals"),
+    },
+}
+
+_POSITIVE_HINTS = {
+    "1": {"end": "lower_with_control"},
+    "2": {"start": "finish_overhead"},
+    "3": {"start": "raise_to_shoulder_height"},
+    "4": {"start": "finish_extension"},
+    "5": {"end": "stand_tall"},
+}
+
+
 # ── Joint reliability ─────────────────────────────────────────────────────────
 
 def joint_reliability(lm) -> float:
@@ -151,6 +184,76 @@ def build_setup_msgs(qualities: list[str], cam_feedback: list[str],
     return msgs
 
 
+def _quality_meets(quality: str | None, requirement: str | None) -> bool:
+    if quality is None or requirement is None:
+        return True
+    if requirement == "GOOD":
+        return quality == "GOOD"
+    if requirement == "WEAK_OR_BETTER":
+        return quality in {"GOOD", "WEAK"}
+    return quality != "LOST"
+
+
+def _format_profile_cue(lang: str, cue_key: str, side_ln: str, bilateral: bool) -> str:
+    cue = t(lang, cue_key)
+    if bilateral and side_ln:
+        return f"  [{side_ln}] {cue}"
+    return f"  {cue}"
+
+
+def _profile_feedback(tracker, angle: float | None, exercise: Exercise,
+                      quality: str | None, lang: str) -> tuple[str, str] | None:
+    profile = exercise.technique_profile
+    if profile is None:
+        return None
+
+    fault_rules = _FAULT_RULES.get(exercise.key, {})
+    tech_state = getattr(tracker, "technique_state", {}) or {}
+    side_ln = t(lang, getattr(tracker, "side", "")) if exercise.bilateral else ""
+
+    for fault in profile.top_faults:
+        meta = fault_rules.get(fault)
+        if meta is None or fault not in tech_state.get("faults", ()):
+            continue
+        cue_key, severity, signal_kind = meta
+        requirement = profile.confidence_requirements.get(signal_kind)
+        if _quality_meets(quality, requirement):
+            return _format_profile_cue(lang, cue_key, side_ln, exercise.bilateral), severity
+
+    if angle is None or not _quality_meets(
+        quality, profile.confidence_requirements.get("primary_signal")
+    ):
+        return None
+
+    end_range = (tech_state.get("signals", {}) or {}).get("end_range", ())
+    if not isinstance(end_range, tuple) or len(end_range) != 2:
+        return None
+
+    cue_key = None
+    if exercise.key == "1" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle > end_range[1]:
+        cue_key = "curl_higher"
+    elif exercise.key == "2" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle < end_range[0]:
+        cue_key = "finish_overhead"
+    elif exercise.key == "3" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle > end_range[1] + 5.0:
+        cue_key = "raise_to_shoulder_height"
+    elif exercise.key == "4" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle < end_range[0]:
+        cue_key = "finish_extension"
+    elif exercise.key == "5" and tracker.stage == "start" and tracker.rep_elapsed > 0.45 and angle > end_range[1]:
+        cue_key = "sit_deeper"
+
+    if cue_key is None:
+        return None
+    return _format_profile_cue(lang, cue_key, side_ln, exercise.bilateral), "warning"
+
+
+def _profile_hint(tracker, exercise: Exercise, lang: str) -> str | None:
+    cue_key = _POSITIVE_HINTS.get(exercise.key, {}).get(tracker.stage)
+    if cue_key is None:
+        return None
+    side_ln = t(lang, getattr(tracker, "side", "")) if exercise.bilateral else ""
+    return _format_profile_cue(lang, cue_key, side_ln, exercise.bilateral).strip()
+
+
 # ── Form feedback messages ────────────────────────────────────────────────────
 
 _SIDES_EN = ["LEFT", "RIGHT"]
@@ -179,20 +282,25 @@ def build_msgs(trackers: list, angles: list, swings: list,
     for i, (tracker, angle, swinging) in enumerate(zip(trackers, angles, swings)):
         side_en = _SIDES_EN[i] if i < 2 else "CENTER"
         side_ln = sides_ln[i]  if i < 2 else ""
+        quality = qualities[i] if qualities is not None and i < len(qualities) else None
 
-        if swinging and (qualities is None or qualities[i] == "GOOD"):
+        profile_msg = _profile_feedback(tracker, angle, exercise, quality, lang)
+        if profile_msg is not None:
+            msgs.append(profile_msg)
+
+        if profile_msg is None and swinging and (qualities is None or qualities[i] == "GOOD"):
             msgs.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error"))
             voice.say(f"Stop swinging your {side_en.lower()} side", 4.0)
 
         if angle is None:
             continue
 
-        if not exercise.invert:
+        if profile_msg is None and not exercise.invert:
             if tracker.stage == "start" and angle > exercise.angle_down - 12:
                 msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
             elif tracker.stage == "end" and angle > exercise.angle_up + 15:
                 msgs.append((f"  {t(lang, 'curl_fully', side=side_ln)}", "warning"))
-        else:
+        elif profile_msg is None:
             if tracker.stage == "start" and angle > exercise.angle_down + 15:
                 msgs.append((f"  {t(lang, 'extend_fully', side=side_ln)}", "warning"))
             elif tracker.stage == "end" and angle < exercise.angle_up - 15:
@@ -206,7 +314,10 @@ def build_msgs(trackers: list, angles: list, swings: list,
         hints = []
         for i, tracker in enumerate(trackers):
             side_ln = sides_ln[i] if i < len(sides_ln) else ""
-            if tracker.stage == "end":
+            profile_hint = _profile_hint(tracker, exercise, lang)
+            if profile_hint:
+                hints.append(profile_hint)
+            elif tracker.stage == "end":
                 hints.append(t(lang, "lower_slowly", side=side_ln))
             elif tracker.stage == "start":
                 hints.append(t(lang, "curl_up", side=side_ln))

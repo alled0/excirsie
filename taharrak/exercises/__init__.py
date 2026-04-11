@@ -13,7 +13,7 @@ Exercise registry for Taharrak.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-from .base             import Exercise                  # re-export for convenience
+from .base             import Exercise, TechniqueProfile  # re-export for convenience
 from .bicep_curl       import BICEP_CURL
 from .shoulder_press   import SHOULDER_PRESS
 from .lateral_raise    import LATERAL_RAISE
@@ -30,4 +30,4 @@ EXERCISES: dict[str, Exercise] = {
     # "6": MY_NEW_EXERCISE,   ← add here after creating its file
 }
 
-__all__ = ["Exercise", "EXERCISES"]
+__all__ = ["Exercise", "TechniqueProfile", "EXERCISES"]
