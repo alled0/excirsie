@@ -313,22 +313,22 @@ def compute_signal_quality(dropout_rate: float, mean_reliability: float,
 
 # ── CLI helpers ────────────────────────────────────────────────────────────────
 
-_BAR = "─" * 52
+_BAR = "-" * 52
 
 def _print_table(metrics: dict) -> None:
     print(f"\n{_BAR}")
-    print(f"  Taharrak Eval  —  {metrics['exercise']}  ({metrics['video']})")
+    print(f"  Taharrak Eval  -  {metrics['exercise']}  ({metrics['video']})")
     print(_BAR)
     print(f"  Frames          {metrics['frames_detected']:>6} / {metrics['frames_total']}")
     print(f"  Dropout rate    {metrics['dropout_rate']:>6.1%}")
-    print(f"  Angle Δ mean    {metrics['angle_delta_mean']:>6.2f} °/frame")
-    print(f"  Angle Δ p95     {metrics['angle_delta_p95']:>6.2f} °/frame")
+    print(f"  Angle d mean    {metrics['angle_delta_mean']:>6.2f} deg/frame")
+    print(f"  Angle d p95     {metrics['angle_delta_p95']:>6.2f} deg/frame")
     print(f"  Reps total      {metrics['reps_total']:>6}")
     if "reps_left" in metrics:
         print(f"    left          {metrics['reps_left']:>6}")
         print(f"    right         {metrics['reps_right']:>6}")
     print(f"  Throughput      {metrics['fps_mean']:>6.1f} fps")
-    print(f"  ── Robustness ──────────────────────────────")
+    print(f"  -- Robustness ---------------------------")
     print(f"  Mean reliability  {metrics['mean_reliability']:>6.3f}")
     print(f"  Recovery rate     {metrics['recovery_rate']:>6.1%}")
     print(f"  Unknown rate      {metrics['unknown_rate']:>6.1%}")

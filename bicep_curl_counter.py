@@ -23,7 +23,8 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from taharrak.exercises  import EXERCISES
-from taharrak.tracker    import RepTracker, VoiceEngine, OneEuroLandmarkSmoother, TrackingGuard
+from taharrak.tracker    import (RepTracker, VoiceEngine, OneEuroLandmarkSmoother,
+                                 TrackingGuard, LiveTrustGate, LiveDiagnostics)
 from taharrak.analysis   import (det_quality_ex, build_msgs,
                                   analyze_camera_position, check_exercise_framing)
 from taharrak.session    import save_csv, persist_session
@@ -183,8 +184,12 @@ def main():
     pb              = {}
 
     guard     = None
+    trust_gate = None
+    diagnostics = LiveDiagnostics()
+    show_diag = False
     frame_idx = 0
     mirror    = cfg.get("mirror_mode", True)
+    last_frame_t = time.perf_counter()
 
     with vision.PoseLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -223,6 +228,10 @@ def main():
 
             if mirror:
                 display = cv2.flip(display, 1)
+
+            now_perf = time.perf_counter()
+            frame_dt = max(now_perf - last_frame_t, 1e-6)
+            last_frame_t = now_perf
 
             # ─────────────────────────────────────────────────────────
             # STATE RENDERING
@@ -271,65 +280,83 @@ def main():
                 swings = [False] * len(trackers)
                 quals  = ["LOST"] * len(trackers)
                 warmup = (set_count == 0)
+                cam_feedback = []
+                trust = trust_gate.update(quals, [False] * len(trackers)) if trust_gate else None
 
                 if lm_smooth:
                     lm    = lm_smooth
-                    lm_px = ui.lm_to_px(lm, w, h, mirror)
-                    ui.draw_skeleton(display, lm_px)
-
                     l_q_raw, r_q_raw = det_quality_ex(lm, exercise, cfg)
+                    cam_feedback = (analyze_camera_position(lm) +
+                                    check_exercise_framing(lm, exercise, cfg))
 
                     if exercise.bilateral:
-                        # Left tracker
                         l_q = trackers[0].smooth_quality(l_q_raw)
-                        quals[0] = l_q
-                        if l_q != "LOST":
-                            a, b, c  = exercise.joints_left
-                            swing_lm = lm[exercise.swing_joint_left]
-                            ang, sw, done, sc = trackers[0].update(
-                                lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
-                            angles[0], swings[0] = ang, sw
-                            ui.draw_arm(display, lm_px, a, b, c, ui.L_COL)
-                            ui.arc_gauge(display,
-                                         lm_px[exercise.joints_left[exercise.arc_joint_idx]],
-                                         ang)
-                            if done and sc is not None:
-                                score_flash["left"] = (sc, time.time() + cfg["score_flash_duration"])
-                                voice.say(f"{t(lang,'left')} {trackers[0].rep_count}. {sc}", 1.0)
-
-                        # Right tracker
                         r_q = trackers[1].smooth_quality(r_q_raw)
-                        quals[1] = r_q
-                        if r_q != "LOST":
-                            a, b, c  = exercise.joints_right
-                            swing_lm = lm[exercise.swing_joint_right]
-                            ang, sw, done, sc = trackers[1].update(
-                                lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
-                            angles[1], swings[1] = ang, sw
+                        quals = [l_q, r_q]
+                        trust = trust_gate.update(quals, [tr._recovering for tr in trackers])
+                        diagnostics.update(frame_dt, quals, [tr._recovering for tr in trackers])
+
+                        if trust.render_allowed:
+                            lm_px = ui.lm_to_px(lm, w, h, mirror)
+                            ui.draw_skeleton(display, lm_px)
+                        if trust.render_allowed and l_q != "LOST":
+                            a, b, c = exercise.joints_left
+                            ui.draw_arm(display, lm_px, a, b, c, ui.L_COL)
+                            if trust.counting_allowed and l_q == "GOOD":
+                                swing_lm = lm[exercise.swing_joint_left]
+                                ang, sw, done, sc = trackers[0].update(
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                angles[0], swings[0] = ang, sw
+                                ui.arc_gauge(display,
+                                             lm_px[exercise.joints_left[exercise.arc_joint_idx]],
+                                             ang)
+                                if done and sc is not None:
+                                    score_flash["left"] = (sc, time.time() + cfg["score_flash_duration"])
+                                    voice.say(f"{t(lang,'left')} {trackers[0].rep_count}. {sc}", 1.0)
+
+                        if trust.render_allowed and r_q != "LOST":
+                            a, b, c = exercise.joints_right
                             ui.draw_arm(display, lm_px, a, b, c, ui.R_COL)
-                            ui.arc_gauge(display,
-                                         lm_px[exercise.joints_right[exercise.arc_joint_idx]],
-                                         ang)
-                            if done and sc is not None:
-                                score_flash["right"] = (sc, time.time() + cfg["score_flash_duration"])
-                                voice.say(f"{t(lang,'right')} {trackers[1].rep_count}. {sc}", 1.0)
+                            if trust.counting_allowed and r_q == "GOOD":
+                                swing_lm = lm[exercise.swing_joint_right]
+                                ang, sw, done, sc = trackers[1].update(
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                angles[1], swings[1] = ang, sw
+                                ui.arc_gauge(display,
+                                             lm_px[exercise.joints_right[exercise.arc_joint_idx]],
+                                             ang)
+                                if done and sc is not None:
+                                    score_flash["right"] = (sc, time.time() + cfg["score_flash_duration"])
+                                    voice.say(f"{t(lang,'right')} {trackers[1].rep_count}. {sc}", 1.0)
                     else:
-                        # Single tracker (right side)
                         r_q = trackers[0].smooth_quality(r_q_raw)
-                        quals[0] = r_q
-                        if r_q != "LOST":
-                            a, b, c  = exercise.joints_right
-                            swing_lm = lm[exercise.swing_joint_right]
-                            ang, sw, done, sc = trackers[0].update(
-                                lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
-                            angles[0], swings[0] = ang, sw
+                        quals = [r_q]
+                        trust = trust_gate.update(quals, [trackers[0]._recovering])
+                        diagnostics.update(frame_dt, quals, [trackers[0]._recovering])
+
+                        if trust.render_allowed:
+                            lm_px = ui.lm_to_px(lm, w, h, mirror)
+                            ui.draw_skeleton(display, lm_px)
+                        if trust.render_allowed and r_q != "LOST":
+                            a, b, c = exercise.joints_right
                             ui.draw_arm(display, lm_px, a, b, c, ui.R_COL)
-                            ui.arc_gauge(display,
-                                         lm_px[exercise.joints_right[exercise.arc_joint_idx]],
-                                         ang)
-                            if done and sc is not None:
-                                score_flash["center"] = (sc, time.time() + cfg["score_flash_duration"])
-                                voice.say(f"Rep {trackers[0].rep_count}. Score {sc}", 1.0)
+                            if trust.counting_allowed and r_q == "GOOD":
+                                swing_lm = lm[exercise.swing_joint_right]
+                                ang, sw, done, sc = trackers[0].update(
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                angles[0], swings[0] = ang, sw
+                                ui.arc_gauge(display,
+                                             lm_px[exercise.joints_right[exercise.arc_joint_idx]],
+                                             ang)
+                                if done and sc is not None:
+                                    score_flash["center"] = (sc, time.time() + cfg["score_flash_duration"])
+                                    voice.say(f"Rep {trackers[0].rep_count}. Score {sc}", 1.0)
+                elif trackers:
+                    for tr in trackers:
+                        tr.smooth_quality("LOST")
+                    quals = ["LOST"] * len(trackers)
+                    trust = trust_gate.update(quals, [tr._recovering for tr in trackers])
+                    diagnostics.update(frame_dt, quals, [tr._recovering for tr in trackers])
 
                 if lm_smooth and guard and guard.update(lm_smooth, trackers, exercise):
                     for tr in trackers:
@@ -338,19 +365,30 @@ def main():
                     guard.reset()
 
                 msgs = build_msgs(trackers, angles, swings,
-                                  exercise, voice, cfg, lang)
+                                  exercise, voice, cfg, lang,
+                                  qualities=quals, trust=trust,
+                                  cam_feedback=cam_feedback)
 
                 if exercise.bilateral:
                     ui.screen_workout_bilateral(
                         display, trackers[0], trackers[1],
                         angles[0], angles[1], swings[0], swings[1],
                         quals[0], quals[1], set_count + 1,
-                        score_flash, msgs, exercise, cfg, lang)
+                        score_flash, msgs, exercise, cfg, lang,
+                        angle_visible=tuple(trust.render_allowed and q == "GOOD" for q in quals),
+                        tempo_visible=tuple(trust.counting_allowed and q == "GOOD" for q in quals),
+                        comparison_allowed=trust.bilateral_compare_allowed)
+                    if show_diag and trust is not None:
+                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust)
                 else:
                     ui.screen_workout_single(
                         display, trackers[0], angles[0], swings[0],
                         quals[0], set_count + 1, score_flash,
-                        msgs, exercise, cfg, lang)
+                        msgs, exercise, cfg, lang,
+                        angle_visible=(trust.render_allowed and quals[0] == "GOOD"),
+                        tempo_visible=(trust.counting_allowed and quals[0] == "GOOD"))
+                    if show_diag and trust is not None:
+                        ui.draw_live_diagnostics(display, diagnostics.snapshot(), trust)
 
             elif state == "REST":
                 elapsed   = time.time() - rest_start
@@ -394,6 +432,8 @@ def main():
             if key == ord("m"):
                 mirror = not mirror
                 cfg["mirror_mode"] = mirror
+            if key == ord("d"):
+                show_diag = not show_diag
 
             if state == "EXERCISE_SELECT":
                 if key in (ord("q"), 27):
@@ -425,6 +465,8 @@ def main():
                         else [RepTracker("center", exercise, cfg)]
                     )
                     guard         = TrackingGuard(cfg)
+                    trust_gate    = LiveTrustGate(cfg, exercise.bilateral)
+                    diagnostics   = LiveDiagnostics()
                     set_count     = 0
                     set_history   = []
                     session_start = time.time()

@@ -14,6 +14,7 @@ import queue
 import threading
 import time
 from collections import Counter, deque
+from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
@@ -32,6 +33,107 @@ class SmoothedLandmark:
         self.z = z
         self.visibility = visibility
         self.presence   = presence
+
+
+@dataclass(frozen=True)
+class LiveTrustState:
+    render_allowed: bool
+    counting_allowed: bool
+    coaching_allowed: bool
+    bilateral_compare_allowed: bool
+    good_frames: tuple
+
+
+class LiveTrustGate:
+    """
+    Lightweight live trust gate layered above raw quality states.
+
+    render_allowed   : enough signal to draw trustable overlays
+    counting_allowed : enough stable GOOD signal to update rep trackers
+    coaching_allowed : enough stable GOOD signal to show coaching cues
+    """
+
+    def __init__(self, cfg: dict, bilateral: bool):
+        self.bilateral = bilateral
+        self._count_frames = int(cfg.get("trust_count_frames", 2))
+        self._coach_frames = int(cfg.get("trust_coach_frames", 5))
+        self._mismatch_tol = int(cfg.get("trust_mismatch_tolerance", 2))
+        self._good_frames = [0, 0]
+
+    def update(self, qualities: list[str], recovering: list[bool]) -> LiveTrustState:
+        rel_count = 2 if self.bilateral else 1
+        q = list(qualities[:rel_count]) + ["LOST"] * max(0, rel_count - len(qualities))
+        r = list(recovering[:rel_count]) + [False] * max(0, rel_count - len(recovering))
+
+        for i in range(rel_count):
+            if q[i] == "GOOD" and not r[i]:
+                self._good_frames[i] += 1
+            else:
+                self._good_frames[i] = 0
+
+        render_allowed = any(state != "LOST" for state in q)
+        counting_allowed = all(self._good_frames[i] >= self._count_frames
+                               for i in range(rel_count))
+        coaching_allowed = all(self._good_frames[i] >= self._coach_frames
+                               for i in range(rel_count))
+        bilateral_compare_allowed = (
+            self.bilateral and coaching_allowed and
+            abs(self._good_frames[0] - self._good_frames[1]) <= self._mismatch_tol
+        )
+
+        return LiveTrustState(
+            render_allowed=render_allowed,
+            counting_allowed=counting_allowed,
+            coaching_allowed=coaching_allowed,
+            bilateral_compare_allowed=bilateral_compare_allowed,
+            good_frames=tuple(self._good_frames[:rel_count]),
+        )
+
+
+class LiveDiagnostics:
+    """Tiny moving-window diagnostics for live camera performance and trust."""
+
+    def __init__(self, window: int = 60):
+        self._dts = deque(maxlen=window)
+        self._qualities = deque(maxlen=window)
+        self._recovering = deque(maxlen=window)
+        self._frame_times = deque(maxlen=window)
+
+    def update(self, dt: float, qualities: list[str], recovering: list[bool]) -> None:
+        dt = max(float(dt), 1e-6)
+        self._dts.append(dt)
+        self._frame_times.append(dt * 1000.0)
+        self._qualities.append(tuple(qualities))
+        self._recovering.append(any(recovering))
+
+    def snapshot(self) -> dict:
+        if not self._dts:
+            return {
+                "fps": 0.0, "dt_ms": 0.0, "jitter_ms": 0.0,
+                "weak_frac": 0.0, "lost_frac": 0.0, "recovery_frac": 0.0,
+                "qualities": (), "frames": 0,
+            }
+        dts = list(self._dts)
+        mean_dt = sum(dts) / len(dts)
+        mean_ms = mean_dt * 1000.0
+        jitter_ms = (
+            sum(abs((dts[i] - dts[i - 1]) * 1000.0) for i in range(1, len(dts))) /
+            max(len(dts) - 1, 1)
+        )
+        q_hist = list(self._qualities)
+        weak = sum(1 for frame in q_hist if any(q == "WEAK" for q in frame))
+        lost = sum(1 for frame in q_hist if any(q == "LOST" for q in frame))
+        rec = sum(1 for val in self._recovering if val)
+        return {
+            "fps": round(1.0 / mean_dt, 1),
+            "dt_ms": round(mean_ms, 1),
+            "jitter_ms": round(jitter_ms, 1),
+            "weak_frac": round(weak / len(q_hist), 3),
+            "lost_frac": round(lost / len(q_hist), 3),
+            "recovery_frac": round(rec / len(self._recovering), 3),
+            "qualities": q_hist[-1],
+            "frames": len(dts),
+        }
 
 
 # ── One Euro Filter ───────────────────────────────────────────────────────────

@@ -291,13 +291,17 @@ def screen_workout_bilateral(frame, left, right,
                               l_angle, r_angle, l_swing, r_swing,
                               l_quality, r_quality, set_num: int,
                               score_flash: dict, msgs: list,
-                              exercise: Exercise, cfg: dict, lang: str):
+                              exercise: Exercise, cfg: dict, lang: str,
+                              angle_visible: tuple[bool, bool] = (True, True),
+                              tempo_visible: tuple[bool, bool] = (True, True),
+                              comparison_allowed: bool = True):
     h, w   = frame.shape[:2]
     now    = time.time()
     target = cfg.get("target_reps", 12)
     PW     = 188
 
-    def _arm_panel(tracker, angle, quality, px, is_warmup, arm_col):
+    def _arm_panel(tracker, angle, quality, px, is_warmup, arm_col,
+                   show_angle: bool, show_tempo: bool):
         trect(frame, px, 10, px + PW, 335)
         side_label = t(lang, "left") if tracker.side == "left" else t(lang, "right")
         put(frame, side_label, (px + 12, 42), 0.70, GRAY, 1)
@@ -323,26 +327,29 @@ def screen_workout_bilateral(frame, left, right,
             sc_col = GREEN if sc >= 80 else (ORANGE if sc >= 60 else RED)
             put(frame, f"{t(lang, 'avg_label')} {sc:.0f}%", (px + 12, 225), 0.65, sc_col, 1)
 
-        if angle is not None:
+        if show_angle and angle is not None:
             put(frame, f"{int(angle):>3}\u00b0", (px + 12, 258), 0.80, YELLOW, 2)
+        if show_tempo and 0 < tracker.rep_elapsed:
             put(frame, t(lang, "tempo_label"),   (px + 12, 282), 0.50, GRAY, 1)
             tempo_bar(frame, px + 12, 288, PW - 24, tracker.rep_elapsed, cfg)
-            if 0 < tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
+            if tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
                 put(frame, t(lang, "too_fast"), (px + 12, 315), 0.58, RED, 1)
 
         if tracker.is_fatigued():
             put(frame, t(lang, "fatigue_warning")[:28], (px + 12, 335), 0.48, ORANGE, 1)
 
     warmup = (set_num == 1)
-    _arm_panel(left,  l_angle, l_quality, 10,        warmup, L_COL)
-    _arm_panel(right, r_angle, r_quality, w - 10 - PW, warmup, R_COL)
+    _arm_panel(left,  l_angle, l_quality, 10,          warmup, L_COL,
+               angle_visible[0], tempo_visible[0])
+    _arm_panel(right, r_angle, r_quality, w - 10 - PW, warmup, R_COL,
+               angle_visible[1], tempo_visible[1])
 
     # Top centre: set badge
     trect(frame, w//2 - 82, 10, w//2 + 82, 52)
     center_put(frame, t(lang, "set_label", n=set_num), 42, 0.90, WHITE, 2)
 
     # Symmetry scores
-    if left.form_scores and right.form_scores:
+    if comparison_allowed and left.form_scores and right.form_scores:
         trect(frame, w//2 - 165, 60, w//2 + 165, 100)
         put(frame, f"L {left.avg_score:.0f}%",  (w//2 - 152, 90), 0.72, L_COL, 1)
         put(frame, "|",                          (w//2 -  8,  90), 0.72, GRAY,  1)
@@ -361,7 +368,7 @@ def screen_workout_bilateral(frame, left, right,
 
     # Symmetry rep-count warning
     mr = max(left.rep_count, right.rep_count, 1)
-    if abs(left.rep_count - right.rep_count) / mr > cfg.get("symmetry_warn_ratio", 0.15) and mr > 2:
+    if comparison_allowed and abs(left.rep_count - right.rep_count) / mr > cfg.get("symmetry_warn_ratio", 0.15) and mr > 2:
         lag = t(lang, "left") if left.rep_count < right.rep_count else t(lang, "right")
         trect(frame, w//2 - 265, h - 108, w//2 + 265, h - 70, (0, 0, 60))
         center_put(frame, t(lang, "sym_lag", side=lag), h - 76, 0.72, ORANGE, 1)
@@ -375,7 +382,9 @@ def screen_workout_bilateral(frame, left, right,
 
 def screen_workout_single(frame, tracker, angle, swinging,
                           quality, set_num: int, score_flash: dict,
-                          msgs: list, exercise: Exercise, cfg: dict, lang: str):
+                          msgs: list, exercise: Exercise, cfg: dict, lang: str,
+                          angle_visible: bool = True,
+                          tempo_visible: bool = True):
     h, w   = frame.shape[:2]
     now    = time.time()
     target = cfg.get("target_reps", 12)
@@ -408,11 +417,12 @@ def screen_workout_single(frame, tracker, angle, swinging,
         sc_col = GREEN if sc >= 80 else (ORANGE if sc >= 60 else RED)
         put(frame, f"{t(lang, 'avg_label')} {sc:.0f}%", (px + 14, 335), 0.68, sc_col, 1)
 
-    if angle is not None:
+    if angle_visible and angle is not None:
         put(frame, f"{int(angle):>3}\u00b0", (px + 14, 362), 0.82, YELLOW, 2)
+    if tempo_visible and angle is not None and 0 < tracker.rep_elapsed:
         put(frame, t(lang, "tempo_label"),   (px + 120, 335), 0.52, GRAY, 1)
         tempo_bar(frame, px + 120, 342, PW - 140, tracker.rep_elapsed, cfg)
-        if 0 < tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
+        if tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
             put(frame, t(lang, "too_fast"), (px + 120, 365), 0.60, RED, 1)
 
     if tracker.is_fatigued():
@@ -629,3 +639,22 @@ def _feedback_strip(frame, msgs: list, h: int):
     trect(frame, 0, h - ph, frame.shape[1], h, (8, 8, 35))
     for i, (txt, severity) in enumerate(msgs):
         put(frame, txt, (12, h - ph + 36 + i * 46), 0.80, severity_color(severity), 2)
+
+
+def draw_live_diagnostics(frame, diag: dict, trust) -> None:
+    if not diag:
+        return
+    h, w = frame.shape[:2]
+    panel_w = 280
+    trect(frame, w - panel_w - 12, 12, w - 12, 164, (6, 6, 18), 0.88)
+    rows = [
+        f"FPS {diag.get('fps', 0):>5.1f}",
+        f"dt  {diag.get('dt_ms', 0):>5.1f} ms",
+        f"jit {diag.get('jitter_ms', 0):>5.1f} ms",
+        f"Q   {' / '.join(diag.get('qualities', ()))}",
+        f"weak {diag.get('weak_frac', 0):.2f}  lost {diag.get('lost_frac', 0):.2f}",
+        f"recovery {diag.get('recovery_frac', 0):.2f}",
+        f"trust r/c/h {int(trust.render_allowed)}/{int(trust.counting_allowed)}/{int(trust.coaching_allowed)}",
+    ]
+    for i, text in enumerate(rows):
+        put(frame, text, (w - panel_w, 38 + i * 20), 0.54, WHITE, 1)

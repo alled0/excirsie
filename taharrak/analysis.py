@@ -133,13 +133,34 @@ def check_exercise_framing(lm, exercise: Exercise, cfg: dict) -> list:
     return issues
 
 
+def build_setup_msgs(qualities: list[str], cam_feedback: list[str],
+                     trust, lang: str) -> list:
+    """Trust-building guidance shown when coaching is intentionally suppressed."""
+    msgs = []
+    if cam_feedback:
+        for key in cam_feedback[:2]:
+            msgs.append((f"  {t(lang, key)}", "warning"))
+        return msgs
+
+    if any(q == "LOST" for q in qualities):
+        return [(f"  {t(lang, 'joint_hidden')}", "warning")]
+    if any(q == "WEAK" for q in qualities):
+        return [(f"  {t(lang, 'cam_poor_vis')}", "warning")]
+    if trust and trust.render_allowed and not trust.coaching_allowed:
+        return [("  Hold still for stable tracking", "ok")]
+    return msgs
+
+
 # ── Form feedback messages ────────────────────────────────────────────────────
 
 _SIDES_EN = ["LEFT", "RIGHT"]
 
 
 def build_msgs(trackers: list, angles: list, swings: list,
-               exercise: Exercise, voice, cfg: dict, lang: str) -> list:
+               exercise: Exercise, voice, cfg: dict, lang: str,
+               qualities: list[str] | None = None,
+               trust = None,
+               cam_feedback: list[str] | None = None) -> list:
     """
     Build real-time form feedback message list for the workout HUD.
     Returns list of (text, severity) tuples where severity is one of:
@@ -149,6 +170,9 @@ def build_msgs(trackers: list, angles: list, swings: list,
 
     The UI layer maps severity → colour via ui.severity_color().
     """
+    if trust is not None and not trust.coaching_allowed:
+        return build_setup_msgs(qualities or [], cam_feedback or [], trust, lang)
+
     msgs      = []
     sides_ln  = [t(lang, "left"), t(lang, "right")]
 
@@ -156,7 +180,7 @@ def build_msgs(trackers: list, angles: list, swings: list,
         side_en = _SIDES_EN[i] if i < 2 else "CENTER"
         side_ln = sides_ln[i]  if i < 2 else ""
 
-        if swinging:
+        if swinging and (qualities is None or qualities[i] == "GOOD"):
             msgs.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error"))
             voice.say(f"Stop swinging your {side_en.lower()} side", 4.0)
 

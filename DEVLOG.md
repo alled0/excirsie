@@ -723,3 +723,128 @@ No callers needed changes.  The severity strings are stable keys, making
 ## Repository
 
 GitHub: [https://github.com/alled0/excirsie](https://github.com/alled0/excirsie)
+
+---
+
+## Phase 1.2 — Live Trust Gate, Conservative Coaching & Diagnostics (2026-04-11)
+
+**Goal:** Improve the live webcam UX without changing the core rep FSM. The
+offline evaluation was already strong, but the OpenCV live experience was too
+eager: it showed noisy coaching, misleading bilateral comparisons, and unstable
+numeric values under weak tracking.
+
+### 1. Explicit Live Trust Levels
+
+Added a small trust layer above raw quality states in `taharrak/tracker.py`:
+
+- `render_allowed`
+- `counting_allowed`
+- `coaching_allowed`
+- `bilateral_compare_allowed`
+
+New classes:
+- `LiveTrustState`
+- `LiveTrustGate`
+- `LiveDiagnostics`
+
+`LiveTrustGate` tracks consecutive GOOD frames per relevant side and exposes
+strictly increasing trust:
+
+- Rendering is the loosest gate: any non-LOST signal can still draw body overlays
+- Counting is stricter: requires stable GOOD frames
+- Coaching is strictest: requires longer stable GOOD tracking
+
+For bilateral exercises, coaching and comparison only unlock when **both**
+sides are GOOD for enough consecutive frames. A mismatch in side stability also
+blocks bilateral comparison.
+
+### 2. Conservative Live Coaching
+
+`build_msgs()` in `taharrak/analysis.py` now accepts live trust state and raw
+quality context.
+
+When coaching trust is **not** ready:
+- suppress form cues such as swing warnings and ROM nudges
+- show only trust-building/setup guidance instead
+- prefer camera/framing feedback such as:
+  - step forward / back
+  - improve lighting
+  - bring the key joint fully into frame
+  - hold still for stable tracking
+
+This keeps weak-tracking frames from producing misleading advice.
+
+### 3. Bilateral Suppression Under Weak or Uneven Tracking
+
+The bilateral workout HUD in `taharrak/ui.py` now hides comparison-driven
+feedback when comparison trust is not allowed.
+
+Suppressed under weak / uneven trust:
+- left-vs-right average comparison strip
+- “arm lagging” symmetry warning
+
+This prevents the app from blaming one side when the real problem is tracking
+quality or side mismatch.
+
+### 4. Cleaner Live HUD
+
+The workout UI was tightened so unstable values are hidden unless trust is high:
+
+- angle is shown only when that side is GOOD enough to trust
+- tempo is shown only when:
+  - the signal is trustworthy
+  - and a rep is actually in progress
+- noisy raw values are suppressed under WEAK / LOST tracking
+
+The current layout was preserved, but the live output is intentionally less
+busy and less numeric when the signal is not trustworthy.
+
+### 5. Toggleable Live Diagnostics
+
+Added a lightweight diagnostics path for live debugging.
+
+Toggle:
+- press `D` during the session
+
+Diagnostics include:
+- FPS
+- moving-average frame time (`dt`)
+- simple frame-time jitter metric
+- current quality state
+- weak / lost frame fraction
+- recovery fraction
+- trust state (`render/counting/coaching`)
+
+Default UX remains clean because diagnostics are off unless explicitly toggled.
+
+### 6. Main Loop Integration
+
+`bicep_curl_counter.py` now wires the trust layer into live workout rendering:
+
+- update quality every frame as before
+- only call tracker counting updates once counting trust is reached
+- only show coaching once coaching trust is reached
+- keep setup guidance available during weak confidence
+- keep diagnostics optional
+
+This was intentionally implemented as a thin live UX layer, not a rewrite of
+the rep logic.
+
+### 7. Tests
+
+Added `tests/test_live_trust.py` covering:
+- trust-level transitions
+- coaching suppression before trust stabilises
+- diagnostics snapshot math
+- bilateral comparison suppression
+- hiding unstable angle / tempo values in the UI
+
+Current test status:
+
+```bash
+python -m unittest discover tests
+```
+
+Result:
+- `Ran 137 tests`
+- `OK`
