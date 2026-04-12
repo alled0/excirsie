@@ -21,8 +21,8 @@ automatically if it is not already present.
 
 For Streamlit Community Cloud deployment:
 
-- Streamlit Cloud may require root-level `packages.txt`
-- use `libgl1`, `libgles2`, and `libegl1` in that file
+- Streamlit Cloud may require extra native packages in root-level `packages.txt`
+- use `libgl1`, `libgles2`, `libegl1`, and `libglib2.0-0` in that file
 - preferably use Python `3.12` in Streamlit Cloud Advanced settings
 - if webcam connection fails on a restrictive network, configure TURN secrets
 
