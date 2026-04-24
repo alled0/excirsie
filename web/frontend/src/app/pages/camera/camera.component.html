@@ -1,0 +1,126 @@
+<div class="max-w-3xl mx-auto px-4 py-8">
+
+  <div class="flex items-center gap-3 mb-6">
+    <a routerLink="/" class="text-sm text-blue-600 hover:underline">&larr; Home</a>
+    <h1 class="text-2xl font-bold">Live workout check</h1>
+  </div>
+
+  <!-- Error loading exercises -->
+  <div *ngIf="loadError" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 text-sm">
+    Could not load exercises — make sure the backend is running.
+  </div>
+
+  <!-- Step 1: exercise picker (shown when camera is not yet active) -->
+  <div *ngIf="!cameraActive" class="card mb-6">
+    <h2 class="font-semibold mb-3">1. Choose your exercise</h2>
+    <select
+      [(ngModel)]="selectedKey"
+      class="w-full border border-gray-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      <option *ngFor="let ex of exercises" [value]="ex.key">{{ ex.name }}</option>
+    </select>
+
+    <div *ngIf="permissionDenied" class="mt-3 text-sm text-red-600">
+      Camera access was denied. Allow it in your browser settings and try again.
+    </div>
+
+    <button class="btn-primary mt-4 w-full" (click)="startCamera()">
+      Turn on camera
+    </button>
+  </div>
+
+  <!-- Live camera view -->
+  <ng-container *ngIf="cameraActive">
+
+    <!-- Video + HUD overlay -->
+    <div class="relative rounded-xl overflow-hidden bg-black mb-4 aspect-video">
+
+      <video
+        #videoEl
+        autoplay
+        playsinline
+        muted
+        class="w-full h-full object-cover scale-x-[-1]"
+      ></video>
+
+      <!-- Hidden canvas used only for capturing frames — never displayed -->
+      <canvas #canvasEl class="hidden"></canvas>
+
+      <!-- Rep counter — top right -->
+      <div *ngIf="sessionActive" class="absolute top-3 right-3 bg-black/60 text-white rounded-xl px-4 py-2 text-center min-w-[72px]">
+        <div class="text-4xl font-bold leading-none">{{ feedback?.reps_total ?? 0 }}</div>
+        <div class="text-xs text-gray-300 mt-1">reps</div>
+        <!-- Bilateral split -->
+        <div *ngIf="feedback?.reps_left !== null && feedback?.reps_left !== undefined"
+             class="text-xs text-gray-400 mt-0.5">
+          L {{ feedback?.reps_left }} / R {{ feedback?.reps_right }}
+        </div>
+      </div>
+
+      <!-- Quality dot — top left -->
+      <div *ngIf="sessionActive" class="absolute top-3 left-3 flex items-center gap-1.5 bg-black/60 rounded-full px-3 py-1">
+        <span class="w-2.5 h-2.5 rounded-full" [ngClass]="qualityDot"></span>
+        <span class="text-white text-xs">{{ feedback?.quality ?? '…' }}</span>
+      </div>
+
+      <!-- Form feedback banner — bottom -->
+      <div
+        *ngIf="sessionActive && feedback?.feedback"
+        class="absolute bottom-0 left-0 right-0 px-4 py-3 text-center text-sm font-semibold transition-colors"
+        [ngClass]="severityClass"
+      >
+        {{ feedback?.feedback }}
+      </div>
+
+      <!-- "Not started" overlay -->
+      <div *ngIf="!sessionActive" class="absolute inset-0 flex items-center justify-center bg-black/30">
+        <p class="text-white text-lg font-medium">Press Start when ready</p>
+      </div>
+
+    </div>
+
+    <!-- Controls row -->
+    <div class="flex gap-3">
+      <button
+        *ngIf="!sessionActive"
+        class="btn-primary flex-1 text-base"
+        [disabled]="!connected && sessionActive"
+        (click)="startSession()"
+      >
+        Start
+      </button>
+
+      <button
+        *ngIf="sessionActive"
+        class="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium px-6 py-3 rounded-lg transition-colors text-base"
+        (click)="stopSession()"
+      >
+        Stop
+      </button>
+
+      <button class="btn-secondary px-4" (click)="stopCamera()">
+        End &amp; close camera
+      </button>
+    </div>
+
+    <!-- Connection status -->
+    <p class="text-xs text-gray-400 mt-2 text-center">
+      <ng-container *ngIf="sessionActive">
+        <span *ngIf="connected" class="text-green-600">● Connected</span>
+        <span *ngIf="!connected" class="text-yellow-500">● Connecting…</span>
+      </ng-container>
+    </p>
+
+  </ng-container>
+
+  <!-- Tips card -->
+  <div class="card mt-6 text-sm text-gray-600">
+    <p class="font-medium text-gray-800 mb-2">Tips for best results</p>
+    <ul class="space-y-1">
+      <li>✓ Stand 1.5–2 m from the camera so your full body is in frame.</li>
+      <li>✓ Good lighting — face a window, not your back to it.</li>
+      <li>✓ Keep the device still and at roughly shoulder height.</li>
+    </ul>
+  </div>
+
+</div>

@@ -287,7 +287,18 @@ try:
 except ImportError:
     _TTS_OK = False
 
+from taharrak.config import (
+    get_exercise_thresholds,
+    get_threshold,
+    normalize_exercise_name,
+)
+from taharrak.data_logging.export import rep_record_to_dict
+from taharrak.data_logging.schema import FaultRecord, RepRecord
 from taharrak.exercises import Exercise
+from taharrak.faults.engine import FaultEngine
+from taharrak.faults.types import RepContext
+from taharrak.kinematics.features import build_kinematics_frame
+from taharrak.phase import ExercisePhaseFSM
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -339,6 +350,7 @@ class RepTracker:
         self.current_set = 1
         self.form_scores: list  = []
         self.rep_log: list      = []
+        self.structured_rep_records: list = []
 
         # One Euro filter for the angle signal (replaces 5-frame mean buffer)
         fps = float(cfg.get("camera_fps", 30))
@@ -358,7 +370,14 @@ class RepTracker:
         self._fault_frames  = Counter()
         self._in_rep        = False
         self.rep_elapsed    = 0.0
-        self.technique_state = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_processing_path = "idle"
+        self.processing_path_counts = {"kinematics": 0, "fallback": 0}
+        self.technique_state = {
+            "faults": (),
+            "signals": {},
+            "view": "unknown",
+            "processing_path": self.last_processing_path,
+        }
         self.last_score_components = {
             "rom": 0,
             "tempo": 0,
@@ -368,6 +387,11 @@ class RepTracker:
         }
         # Most recent RepCorrection for this tracker (set by CorrectionEngine.assess_rep)
         self.last_correction = None
+        self.last_phase_validation = None
+        self.last_kinematics = None
+        self.last_fault_evaluations = ()
+        self._phase_fsm = ExercisePhaseFSM(exercise, cfg)
+        self._fault_engine = FaultEngine(cfg)
 
         # Per-set robustness counters (used by eval harness + coaching)
         self.aborted_reps      = 0   # reps discarded by _abort_rep()
@@ -396,7 +420,8 @@ class RepTracker:
 
     # ------------------------------------------------------------------
     def update(self, p_lm, v_lm, d_lm, swing_lm, w: int, h: int,
-               warmup_mode: bool = False, now: float | None = None):
+               warmup_mode: bool = False, now: float | None = None,
+               landmarks=None):
         """
         p_lm / v_lm / d_lm  : proximal, vertex, distal landmarks
         swing_lm             : landmark used for sway detection (shoulder or hip)
@@ -420,6 +445,12 @@ class RepTracker:
             len(self._sh_y_hist) >= 8 and
             (max(self._sh_y_hist) - min(self._sh_y_hist)) > self.exercise.swing_threshold
         )
+        self.last_processing_path = "kinematics" if landmarks is not None else "fallback"
+        self.processing_path_counts[self.last_processing_path] += 1
+        self.last_kinematics = (
+            build_kinematics_frame(landmarks, timestamp=now, side=self.side)
+            if landmarks is not None else None
+        )
 
         # Tempo tracking
         self.rep_elapsed = (now - self._rep_start) if self._rep_start else 0.0
@@ -438,7 +469,49 @@ class RepTracker:
         score    = None
         ex       = self.exercise
 
-        if not ex.invert:
+        if self.last_kinematics is not None:
+            quality_scores = [
+                quality.score for quality in self.last_kinematics.landmark_quality.values()
+                if quality is not None
+            ]
+            phase_conf = min([self.last_kinematics.view_confidence or 1.0] + quality_scores) \
+                if quality_scores else (self.last_kinematics.view_confidence or 1.0)
+            self.last_phase_validation = self._phase_fsm.update(angle, confidence=phase_conf)
+
+            if self.last_phase_validation.started and not self._in_rep:
+                self._begin_rep(now)
+
+            if self.last_phase_validation.phase == "SETUP":
+                self.stage = None
+            elif self.last_phase_validation.phase in {
+                "TOP_OR_LOCKOUT", "BOTTOM_OR_STRETCH", "LOWERING", "ASCENT", "COMPLETE"
+            }:
+                self.stage = "end"
+            else:
+                self.stage = "start"
+
+            if self.last_phase_validation.invalid_reasons and self._in_rep:
+                self._discard_rep(
+                    "invalid_phase",
+                    stage="start",
+                    reasons=self.last_phase_validation.invalid_reasons,
+                    phase_sequence=self.last_phase_validation.phase_sequence,
+                )
+            elif self.last_phase_validation.counted and self._in_rep:
+                dur = (now - self._rep_start) if self._rep_start else 2.0
+                if dur >= ex.min_rep_time:
+                    self._min_dur_blocked = False
+                    score = self._score(dur, warmup_mode)
+                    self._finish_rep(score, now)
+                    rep_done = True
+                elif not self._min_dur_blocked:
+                    self.rejected_reps    += 1
+                    self._min_dur_blocked  = True
+                    self._log_event("below_min_duration",
+                                    duration_s=round(dur, 3),
+                                    min_rep_time=ex.min_rep_time)
+                    self._discard_rep("below_min_duration", stage="start")
+        elif not ex.invert:
             # Angle decreases to complete rep (curl, squat)
             if angle > ex.angle_down and self.stage != "start":
                 self._begin_rep(now)
@@ -480,7 +553,7 @@ class RepTracker:
             if swinging:
                 self._swing_frames += 1
 
-        self._update_technique_state(angle, p_n, v_n, d_n, swinging)
+        self._update_technique_state(angle, p_n, v_n, d_n, swinging, landmarks=self.last_kinematics)
 
         return angle, swinging, rep_done, score
 
@@ -508,7 +581,8 @@ class RepTracker:
                                 p_n: tuple[float, float],
                                 v_n: tuple[float, float],
                                 d_n: tuple[float, float],
-                                swinging: bool) -> None:
+                                swinging: bool,
+                                landmarks=None) -> None:
         start_range, end_range = self._profile_angle_ranges()
         faults = []
         signals = {
@@ -518,10 +592,85 @@ class RepTracker:
         }
         key = self.exercise.key
 
+        if landmarks is not None:
+            context = RepContext(
+                side=self.side,
+                stage=self.stage,
+                rep_elapsed=self.rep_elapsed,
+                in_rep=self._in_rep,
+                angle=angle,
+                swinging=swinging,
+                phase=(self.last_phase_validation.phase if self.last_phase_validation else None),
+                phase_sequence=(self.last_phase_validation.phase_sequence
+                                if self.last_phase_validation else ()),
+                invalid_reasons=(self.last_phase_validation.invalid_reasons
+                                 if self.last_phase_validation else ()),
+            )
+            evaluations = self._fault_engine.evaluate(self.exercise, landmarks, context)
+            self.last_fault_evaluations = tuple(evaluations)
+            faults = [
+                evaluation.fault
+                for evaluation in evaluations
+                if evaluation.active and not evaluation.suppressed
+            ]
+            signals.update({
+                "phase": context.phase,
+                "phase_sequence": context.phase_sequence,
+                "invalid_reasons": context.invalid_reasons,
+                "view_confidence": landmarks.view_confidence,
+                "fault_evaluations": {
+                    evaluation.fault: {
+                        "active": evaluation.active,
+                        "confidence": evaluation.confidence,
+                        "value": evaluation.value,
+                        "threshold": evaluation.threshold,
+                        "suppressed": evaluation.suppressed,
+                        "suppress_reason": evaluation.suppress_reason,
+                    }
+                    for evaluation in evaluations
+                },
+            })
+            feature_keys = (
+                "active_upper_arm_torso_angle",
+                "trunk_swing_angle",
+                "wrist_elbow_alignment_left",
+                "wrist_elbow_alignment_right",
+                "shoulder_abduction_angle_left",
+                "shoulder_abduction_angle_right",
+                "elbow_collapse_proxy_left",
+                "elbow_collapse_proxy_right",
+                "trunk_tibia_angle_left",
+                "trunk_tibia_angle_right",
+                "knee_valgus_proxy_left",
+                "knee_valgus_proxy_right",
+                "shoulder_drift_proxy_left",
+                "shoulder_drift_proxy_right",
+                "elbow_flare_proxy_left",
+                "elbow_flare_proxy_right",
+                "torso_extension_angle",
+                "squat_depth_proxy_left",
+                "squat_depth_proxy_right",
+            )
+            for feature_key in feature_keys:
+                if landmarks.get(feature_key) is not None:
+                    signals[feature_key] = landmarks.get(feature_key)
+            self.technique_state = {
+                "faults": tuple(dict.fromkeys(faults)),
+                "signals": signals,
+                "view": landmarks.view,
+                "view_confidence": landmarks.view_confidence,
+                "processing_path": self.last_processing_path,
+                "fault_evaluations": signals["fault_evaluations"],
+            }
+            if self._in_rep:
+                for fault in self.technique_state["faults"]:
+                    self._fault_frames[fault] += 1
+            return
+
         if key == "1":
             drift = abs(v_n[0] - p_n[0])
             signals["upper_arm_drift"] = round(drift, 4)
-            if drift > 0.08:
+            if drift > float(self.cfg.get("legacy_upper_arm_offset_warn_norm", 0.08)):
                 faults.append("upper_arm_drift")
             if swinging:
                 faults.append("trunk_swing")
@@ -530,19 +679,25 @@ class RepTracker:
         elif key == "2":
             offset = abs(d_n[0] - v_n[0])
             signals["wrist_elbow_offset"] = round(offset, 4)
-            if offset > 0.10:
+            if offset > float(self.cfg.get("legacy_wrist_elbow_offset_warn_norm", 0.10)):
                 faults.append("wrist_elbow_misstacking")
             if swinging:
                 faults.append("excessive_lean_back")
             if self.stage == "start" and self.rep_elapsed > 0.35 and angle < end_range[0]:
                 faults.append("incomplete_lockout")
         elif key == "3":
-            if self.stage == "start" and self.rep_elapsed > 0.35 and angle > end_range[1] + 5.0:
+            threshold = get_threshold(
+                normalize_exercise_name(self.exercise.key),
+                "overheight_warn_deg",
+                self.cfg,
+                default=end_range[1] + 5.0,
+            )
+            if self.stage == "start" and self.rep_elapsed > 0.35 and angle > threshold:
                 faults.append("raising_too_high")
         elif key == "4":
             offset = abs(d_n[0] - v_n[0])
             signals["wrist_elbow_offset"] = round(offset, 4)
-            if offset > 0.10:
+            if offset > float(self.cfg.get("legacy_wrist_elbow_offset_warn_norm", 0.10)):
                 faults.append("elbow_flare")
             if self.stage == "start" and self.rep_elapsed > 0.35 and angle < end_range[0]:
                 faults.append("incomplete_extension")
@@ -556,6 +711,7 @@ class RepTracker:
             "signals": signals,
             "view": self.exercise.technique_profile.preferred_view
                     if self.exercise.technique_profile else "unknown",
+            "processing_path": self.last_processing_path,
         }
         if self._in_rep:
             for fault in faults:
@@ -571,6 +727,19 @@ class RepTracker:
         self._fault_frames.clear()
         self._in_rep           = True
         self._min_dur_blocked  = False
+
+    def _discard_rep(self, category: str, stage: str | None = None, **ctx) -> None:
+        if self._in_rep or ctx:
+            self._log_event(category, **ctx)
+        self._in_rep          = False
+        self._rep_start       = None
+        self._rep_min_a       = 180.0
+        self._rep_max_a       = 0.0
+        self._swing_frames    = 0
+        self._fault_frames.clear()
+        self.rep_elapsed      = 0.0
+        self._min_dur_blocked = False
+        self.stage            = stage
 
     def _abort_rep(self) -> None:
         """
@@ -595,6 +764,7 @@ class RepTracker:
         self._min_dur_blocked  = False
         self._angle_filter.reset()
         self.aborted_reps     += 1
+        self._phase_fsm.reset()
 
     def _finish_rep(self, score: int, now: float | None = None):
         end_t = time.time() if now is None else now
@@ -602,7 +772,23 @@ class RepTracker:
         self.rep_count  += 1
         self.total_reps += 1
         self.form_scores.append(score)
-        self.rep_log.append({
+        phase_validation = {
+            "phase": self.last_phase_validation.phase,
+            "phase_sequence": list(self.last_phase_validation.phase_sequence),
+            "invalid_reasons": list(self.last_phase_validation.invalid_reasons),
+        } if self.last_phase_validation else None
+        fault_evaluations = {
+            evaluation.fault: {
+                "active": evaluation.active,
+                "confidence": evaluation.confidence,
+                "value": evaluation.value,
+                "threshold": evaluation.threshold,
+                "suppressed": evaluation.suppressed,
+                "suppress_reason": evaluation.suppress_reason,
+            }
+            for evaluation in self.last_fault_evaluations
+        }
+        record = {
             "timestamp":   datetime.now().isoformat(),
             "side":        self.side,
             "set_num":     self.current_set,
@@ -612,12 +798,62 @@ class RepTracker:
             "duration_s":  round((end_t - self._rep_start) if self._rep_start else 0, 2),
             "min_angle":   round(self._rep_min_a, 1),
             "max_angle":   round(self._rep_max_a, 1),
+            "processing_path": self.last_processing_path,
             "swing_frames": self._swing_frames,
             "fault_frames": dict(self._fault_frames),
-        })
+            "phase_validation": phase_validation,
+            "fault_evaluations": fault_evaluations,
+        }
+        structured = RepRecord(
+            exercise=self.exercise.key,
+            rep_index=self.rep_count,
+            valid=True,
+            counted=True,
+            start_time=self._rep_start,
+            end_time=end_t,
+            view=(self.technique_state.get("view", "unknown") if self.technique_state else "unknown"),
+            view_confidence=float(self.technique_state.get("view_confidence", 0.0)
+                                  if self.technique_state else 0.0),
+            phase_sequence=tuple(phase_validation["phase_sequence"]) if phase_validation else (),
+            invalid_reasons=tuple(phase_validation["invalid_reasons"]) if phase_validation else (),
+            faults=tuple(
+                FaultRecord(
+                    fault=evaluation.fault,
+                    active=evaluation.active,
+                    confidence=evaluation.confidence,
+                    value=evaluation.value,
+                    threshold=evaluation.threshold,
+                    suppressed=evaluation.suppressed,
+                    suppress_reason=evaluation.suppress_reason,
+                )
+                for evaluation in self.last_fault_evaluations
+            ),
+            feature_summary={
+                key: value
+                for key, value in (self.technique_state.get("signals", {}) or {}).items()
+                if isinstance(value, (int, float)) or value is None
+            },
+            landmark_quality={
+                name: {
+                    "score": quality.score,
+                    "missing": list(quality.missing),
+                    "low_confidence": list(quality.low_confidence),
+                    "usable": quality.usable,
+                }
+                for name, quality in (
+                    self.last_kinematics.landmark_quality.items()
+                    if self.last_kinematics is not None else []
+                )
+            },
+            thresholds_used=get_exercise_thresholds(normalize_exercise_name(self.exercise.key), self.cfg),
+        )
+        record["structured_record"] = rep_record_to_dict(structured)
+        self.rep_log.append(record)
+        self.structured_rep_records.append(structured)
         self._in_rep    = False
         self._rep_start = None
         self.rep_elapsed = 0.0
+        self._phase_fsm.reset()
 
     def _build_score_breakdown(self, duration: float, warmup_mode: bool) -> dict:
         ex  = self.exercise
@@ -753,7 +989,13 @@ class RepTracker:
         self.rep_elapsed      = 0.0
         self._last_upd_t      = 0.0
         self._min_dur_blocked = False
-        self.technique_state  = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_processing_path = "idle"
+        self.technique_state  = {
+            "faults": (),
+            "signals": {},
+            "view": "unknown",
+            "processing_path": self.last_processing_path,
+        }
         self.last_score_components = {
             "rom": 0,
             "tempo": 0,
@@ -765,8 +1007,12 @@ class RepTracker:
         self.rejected_reps    = 0
         self.event_log        = []
         self.last_correction  = None
+        self.last_phase_validation = None
+        self.last_kinematics = None
+        self.last_fault_evaluations = ()
         self._angle_filter.reset()
         self._sh_y_hist.clear()
+        self._phase_fsm.reset()
         # Reset recovery state so the next set starts fresh
         self._consecutive_good = 0
         self._consecutive_lost = 0
@@ -794,7 +1040,13 @@ class RepTracker:
         self.rep_elapsed      = 0.0
         self._last_upd_t      = 0.0
         self._min_dur_blocked = False
-        self.technique_state  = {"faults": (), "signals": {}, "view": "unknown"}
+        self.last_processing_path = "idle"
+        self.technique_state  = {
+            "faults": (),
+            "signals": {},
+            "view": "unknown",
+            "processing_path": self.last_processing_path,
+        }
         self.last_score_components = {
             "rom": 0,
             "tempo": 0,
@@ -803,12 +1055,19 @@ class RepTracker:
             "instability": 0,
         }
         self._angle_filter.reset()
+        self.last_phase_validation = None
+        self.last_kinematics = None
+        self.last_fault_evaluations = ()
+        self._phase_fsm.reset()
         self._consecutive_good = 0
         self._consecutive_lost = 0
         self._recovering       = False
 
     def all_rep_logs(self) -> list:
         return self.rep_log
+
+    def all_structured_rep_logs(self) -> list:
+        return self.structured_rep_records
 
     def all_event_logs(self) -> list:
         """Return the list of non-completion events (abort / reject / suppress)."""

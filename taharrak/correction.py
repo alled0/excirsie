@@ -24,8 +24,10 @@ from taharrak.messages import t
 
 FAULT_PRIORITY: dict[str, int] = {
     # Tier 1
+    "knee_collapse":           1,
     "trunk_swing":             1,
     "excessive_lean_back":     1,
+    "excessive_forward_lean":  1,
     "upper_arm_drift":         1,
     "elbow_flare":             1,
     # Tier 2
@@ -33,9 +35,11 @@ FAULT_PRIORITY: dict[str, int] = {
     "incomplete_lockout":      2,
     "incomplete_extension":    2,
     "insufficient_depth":      2,
+    "shoulder_drift":          2,
     "raising_too_high":        2,
     "wrist_elbow_misstacking": 2,
-    "excessive_forward_lean":  2,
+    "elbow_collapse":          3,
+    "shrugging":               3,
     # Tier 3
     "too_fast":                3,
     # Tier 4
@@ -52,7 +56,11 @@ _FAULT_CUE: dict[str, str] = {
     "incomplete_lockout":      "finish_overhead",
     "incomplete_extension":    "finish_extension",
     "insufficient_depth":      "sit_deeper",
+    "knee_collapse":           "knees_over_toes",
+    "shoulder_drift":          "keep_shoulders_still",
     "raising_too_high":        "raise_to_shoulder_height",
+    "elbow_collapse":          "keep_soft_bend",
+    "shrugging":               "shoulders_down",
     "wrist_elbow_misstacking": "stack_wrists_over_elbows",
     "excessive_forward_lean":  "chest_up",
     "too_fast":                "slow_down",

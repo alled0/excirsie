@@ -1,0 +1,94 @@
+<!-- Hero -->
+<section class="bg-gradient-to-b from-blue-600 to-blue-700 text-white py-20 px-4">
+  <div class="max-w-3xl mx-auto text-center">
+    <h1 class="text-4xl sm:text-5xl font-bold mb-4">
+      Check your workout form instantly
+    </h1>
+    <p class="text-blue-100 text-lg mb-8">
+      Upload a short video of your set — get your rep count, quality score,
+      and specific cues to improve.
+    </p>
+    <div class="flex flex-col sm:flex-row gap-3 justify-center">
+      <a routerLink="/camera" class="inline-block bg-white text-blue-700 font-semibold px-8 py-3 rounded-lg shadow hover:bg-blue-50 transition-colors">
+        Live camera check
+      </a>
+      <a routerLink="/analyze" class="inline-block bg-blue-500 text-white font-semibold px-8 py-3 rounded-lg shadow hover:bg-blue-400 transition-colors">
+        Upload a video
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section class="max-w-4xl mx-auto px-4 py-16">
+  <h2 class="text-2xl font-semibold text-center mb-10">How it works</h2>
+  <div class="grid sm:grid-cols-3 gap-6 text-center">
+    <div class="card">
+      <div class="text-4xl mb-3">🎥</div>
+      <h3 class="font-semibold mb-1">1. Record your set</h3>
+      <p class="text-gray-500 text-sm">Film yourself from a side or front angle with your full body in frame.</p>
+    </div>
+    <div class="card">
+      <div class="text-4xl mb-3">📤</div>
+      <h3 class="font-semibold mb-1">2. Upload the video</h3>
+      <p class="text-gray-500 text-sm">Pick your exercise, drop in the file, and hit analyse.</p>
+    </div>
+    <div class="card">
+      <div class="text-4xl mb-3">📊</div>
+      <h3 class="font-semibold mb-1">3. See your results</h3>
+      <p class="text-gray-500 text-sm">Get a rep count, signal quality score, and any form issues flagged.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Supported exercises -->
+<section class="bg-gray-50 py-16 px-4">
+  <div class="max-w-4xl mx-auto">
+    <h2 class="text-2xl font-semibold text-center mb-2">Supported exercises</h2>
+    <p class="text-gray-500 text-center mb-10">More coming soon based on feedback.</p>
+
+    <div *ngIf="loadError" class="text-center text-red-500 py-6">
+      Could not load the exercise list — make sure the backend is running.
+    </div>
+
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div *ngFor="let ex of exercises" class="card hover:shadow-md transition-shadow">
+        <div class="text-3xl mb-2">{{ icons[ex.key] }}</div>
+        <h3 class="font-semibold">{{ ex.name }}</h3>
+        <p class="text-gray-500 text-sm mt-1">{{ descriptions[ex.key] }}</p>
+        <span *ngIf="ex.bilateral" class="badge bg-blue-50 text-blue-700 mt-3">Bilateral</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Recording tips -->
+<section class="max-w-3xl mx-auto px-4 py-16">
+  <h2 class="text-2xl font-semibold text-center mb-8">Tips for best results</h2>
+  <ul class="space-y-3 text-gray-700">
+    <li class="flex gap-3">
+      <span class="text-green-500 font-bold mt-0.5">✓</span>
+      <span>Film from a <strong>side or front angle</strong> at roughly shoulder height.</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="text-green-500 font-bold mt-0.5">✓</span>
+      <span>Make sure your <strong>full body is in frame</strong> throughout the set.</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="text-green-500 font-bold mt-0.5">✓</span>
+      <span>Good lighting helps — avoid filming with a bright window behind you.</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="text-green-500 font-bold mt-0.5">✓</span>
+      <span>Keep the camera still; shaky footage reduces accuracy.</span>
+    </li>
+    <li class="flex gap-3">
+      <span class="text-red-400 font-bold mt-0.5">✕</span>
+      <span>Avoid very long clips — a single set of 8–15 reps works best.</span>
+    </li>
+  </ul>
+
+  <div class="mt-10 text-center">
+    <a routerLink="/analyze" class="btn-primary inline-block">Analyse my video</a>
+  </div>
+</section>

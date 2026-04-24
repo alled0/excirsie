@@ -1,0 +1,95 @@
+<div class="max-w-4xl mx-auto px-4 py-12">
+
+  <div class="flex items-center justify-between mb-8">
+    <div>
+      <h1 class="text-3xl font-bold">Your history</h1>
+      <p class="text-gray-500 mt-1">All past sessions — live and uploaded.</p>
+    </div>
+    <div class="flex gap-2">
+      <a routerLink="/camera" class="btn-secondary text-sm py-2 px-4">Live camera</a>
+      <a routerLink="/analyze" class="btn-primary text-sm py-2 px-4">Upload video</a>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div *ngIf="loading" class="text-center py-16 text-gray-400">Loading…</div>
+
+  <!-- Error -->
+  <div *ngIf="error" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
+    Could not load history — make sure the model service is running.
+  </div>
+
+  <!-- Empty state -->
+  <div *ngIf="!loading && !error && records.length === 0" class="text-center py-16">
+    <p class="text-4xl mb-3">🏋️</p>
+    <p class="text-gray-600 font-medium">No sessions yet.</p>
+    <p class="text-gray-400 text-sm mt-1">Complete a live session or upload a video to see your history here.</p>
+    <a routerLink="/camera" class="btn-primary inline-block mt-6">Start your first session</a>
+  </div>
+
+  <!-- Records table -->
+  <div *ngIf="!loading && records.length > 0" class="card p-0 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-600 uppercase text-xs tracking-wide">
+        <tr>
+          <th class="px-4 py-3 text-left">Date</th>
+          <th class="px-4 py-3 text-left">Exercise</th>
+          <th class="px-4 py-3 text-center">Source</th>
+          <th class="px-4 py-3 text-center">Reps</th>
+          <th class="px-4 py-3 text-center">Signal quality</th>
+          <th class="px-4 py-3 text-center">Detection</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        <tr *ngFor="let r of records" class="hover:bg-gray-50 transition-colors">
+
+          <td class="px-4 py-3 text-gray-500 whitespace-nowrap">
+            {{ r.timestamp | date:'dd MMM, HH:mm' }}
+          </td>
+
+          <td class="px-4 py-3 font-medium text-gray-900">
+            {{ r.exercise_name }}
+          </td>
+
+          <td class="px-4 py-3 text-center">
+            <span
+              class="badge"
+              [ngClass]="r.source === 'live'
+                ? 'bg-purple-50 text-purple-700'
+                : 'bg-blue-50 text-blue-700'"
+            >
+              {{ r.source === 'live' ? '🎥 Live' : '📤 Upload' }}
+            </span>
+          </td>
+
+          <td class="px-4 py-3 text-center font-semibold text-gray-900">
+            {{ r.reps_total }}
+            <span *ngIf="r.reps_left !== null && r.reps_left !== undefined"
+                  class="block text-xs text-gray-400 font-normal">
+              L {{ r.reps_left }} / R {{ r.reps_right }}
+            </span>
+          </td>
+
+          <td class="px-4 py-3 text-center">
+            <span [ngClass]="qualityClass(r.signal_quality)" class="font-medium">
+              {{ r.signal_quality !== null ? (r.signal_quality | percent:'1.0-0') : '—' }}
+            </span>
+            <span class="block text-xs" [ngClass]="qualityClass(r.signal_quality)">
+              {{ qualityLabel(r.signal_quality) }}
+            </span>
+          </td>
+
+          <td class="px-4 py-3 text-center text-gray-500">
+            <ng-container *ngIf="r.frames_total; else noCoverage">
+              {{ (r.frames_detected ?? 0) / r.frames_total | percent:'1.0-0' }}
+              <span class="block text-xs text-gray-400">{{ r.frames_detected }}/{{ r.frames_total }}</span>
+            </ng-container>
+            <ng-template #noCoverage>—</ng-template>
+          </td>
+
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>

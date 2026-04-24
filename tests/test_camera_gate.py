@@ -13,6 +13,7 @@ import unittest
 from taharrak.analysis import analyze_camera_position, build_msgs, check_exercise_framing
 from taharrak.exercises.bicep_curl import BICEP_CURL
 from taharrak.exercises.squat import SQUAT
+from taharrak.tracker import LiveTrustState
 
 
 # ── Mock landmark factory ─────────────────────────────────────────────────────
@@ -298,6 +299,63 @@ class TestBuildMsgsSemantics(unittest.TestCase):
         tr   = _StubTracker(stage=None)
         msgs = self._call([tr], [90.0], [False])
         self.assertEqual(msgs, [])
+
+
+class _FaultTracker:
+    def __init__(self, faults=(), stage=None):
+        self.stage = stage
+        self.rep_elapsed = 0.0
+        self.side = "center"
+        self.technique_state = {
+            "faults": tuple(faults),
+            "signals": {"end_range": (90.0, 120.0)},
+            "view": "unknown",
+            "fault_evaluations": {
+                "excessive_forward_lean": {
+                    "active": False,
+                    "suppressed": True,
+                    "suppress_reason": "view_unreliable",
+                }
+            },
+        }
+
+
+class TestSuppressionAndCameraFeedback(unittest.TestCase):
+    def test_suppressed_fault_is_not_surface_as_biomechanical_correction(self):
+        tracker = _FaultTracker(faults=(), stage=None)
+
+        msgs = build_msgs(
+            [tracker], [None], [False], SQUAT, _MockVoice(), _CFG_MSGS, "en", qualities=["GOOD"]
+        )
+
+        self.assertEqual(msgs, [])
+
+    def test_camera_setup_message_prefers_setup_feedback_in_english_and_arabic(self):
+        trust = LiveTrustState(
+            render_allowed=True,
+            counting_allowed=False,
+            coaching_allowed=False,
+            bilateral_compare_allowed=False,
+            counting_sides=(False,),
+            coaching_sides=(False,),
+            good_frames=(0,),
+            visible_frames=(0,),
+        )
+        tracker = _FaultTracker(faults=("upper_arm_drift",), stage="start")
+
+        msgs_en = build_msgs(
+            [tracker], [165.0], [False], BICEP_CURL, _MockVoice(), _CFG_MSGS, "en",
+            qualities=["WEAK"], trust=trust, cam_feedback=["cam_turn_left"],
+        )
+        msgs_ar = build_msgs(
+            [tracker], [165.0], [False], BICEP_CURL, _MockVoice(), _CFG_MSGS, "ar",
+            qualities=["WEAK"], trust=trust, cam_feedback=["cam_turn_left"],
+        )
+
+        self.assertTrue(msgs_en)
+        self.assertTrue(msgs_ar)
+        self.assertIn("turn", msgs_en[0][0].lower())
+        self.assertNotEqual(msgs_en[0][0], msgs_ar[0][0])
 
 
 if __name__ == "__main__":

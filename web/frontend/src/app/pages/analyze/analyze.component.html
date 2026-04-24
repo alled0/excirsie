@@ -1,0 +1,70 @@
+<div class="max-w-2xl mx-auto px-4 py-12">
+  <h1 class="text-3xl font-bold mb-2">Analyse a video</h1>
+  <p class="text-gray-500 mb-8">Select your exercise, upload a clip, and we'll score your form.</p>
+
+  <!-- Exercise picker -->
+  <div class="card mb-6">
+    <label class="block text-sm font-medium text-gray-700 mb-2">Exercise</label>
+    <select
+      [(ngModel)]="selectedKey"
+      class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      <option *ngFor="let ex of exercises" [value]="ex.key">
+        {{ ex.name }}
+      </option>
+    </select>
+  </div>
+
+  <!-- Drop zone -->
+  <div
+    class="card mb-6 border-2 border-dashed transition-colors cursor-pointer"
+    [class.border-blue-400]="isDragging"
+    [class.bg-blue-50]="isDragging"
+    [class.border-gray-300]="!isDragging"
+    (dragover)="onDragOver($event)"
+    (dragleave)="onDragLeave()"
+    (drop)="onDrop($event)"
+    (click)="fileInput.click()"
+  >
+    <input #fileInput type="file" accept="video/*" class="hidden" (change)="onFileSelected($event)" />
+
+    <div class="text-center py-6">
+      <ng-container *ngIf="!selectedFile; else fileSelected">
+        <div class="text-4xl mb-3">🎬</div>
+        <p class="font-medium text-gray-700">Drop your video here, or click to browse</p>
+        <p class="text-sm text-gray-400 mt-1">MP4, MOV, AVI — up to 500 MB</p>
+      </ng-container>
+
+      <ng-template #fileSelected>
+        <div class="text-4xl mb-3">✅</div>
+        <p class="font-medium text-gray-800">{{ selectedFile!.name }}</p>
+        <p class="text-sm text-gray-500 mt-1">{{ fileSizeMb }} MB &mdash; click to change</p>
+      </ng-template>
+    </div>
+  </div>
+
+  <!-- Error message -->
+  <div *ngIf="errorMessage" class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6 text-sm">
+    {{ errorMessage }}
+  </div>
+
+  <!-- Analysing state -->
+  <div *ngIf="isAnalysing" class="card mb-6 text-center py-6">
+    <div class="text-2xl mb-3 animate-spin inline-block">⚙️</div>
+    <p class="font-medium text-gray-700">Analysing your {{ selectedExerciseName }} video…</p>
+    <p class="text-sm text-gray-400 mt-1">This can take 30–90 seconds depending on clip length.</p>
+    <!-- Simple animated progress bar -->
+    <div class="mt-4 w-full bg-gray-100 rounded-full h-1.5">
+      <div class="bg-blue-500 h-1.5 rounded-full animate-pulse" style="width: 60%"></div>
+    </div>
+  </div>
+
+  <!-- Submit button -->
+  <button
+    class="btn-primary w-full text-base"
+    [disabled]="!selectedFile || !selectedKey || isAnalysing"
+    (click)="submit()"
+  >
+    {{ isAnalysing ? 'Analysing…' : 'Analyse my video' }}
+  </button>
+</div>

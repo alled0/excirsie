@@ -5,6 +5,9 @@ __pycache__/
 *.pyd
 *.egg
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 dist/
 build/
 .eggs/
@@ -44,5 +47,36 @@ desktop.ini
 *.pem
 *.key
 
+# Test / coverage artifacts
+pytest-cache-files-*/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Local runtime data
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.mv.db
+*.log
+
 # Research files
 Researchs/
+Reasearchs/
+
+# Angular frontend
+web/frontend/node_modules/
+web/frontend/dist/
+web/frontend/.angular/
+
+# Spring Boot backend
+web/backend/target/
+web/backend/data/
+
+# Docker
+web/backend/*.jar
+
+# Python model service (venv if created inside the folder)
+web/model-service/.venv/
+web/model-service/venv/

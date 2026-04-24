@@ -2,7 +2,9 @@ import unittest
 
 from taharrak.analysis import build_msgs
 from taharrak.exercises import EXERCISES
+from taharrak.kinematics.features import build_kinematics_frame
 from taharrak.tracker import RepTracker
+from tests.helpers_pose import named_landmark_dict
 
 
 CFG = {
@@ -56,7 +58,7 @@ class TestTechniqueFaultDetection(unittest.TestCase):
         cases = [
             ("1", "upper_arm_drift", 100.0, 0.5, (0.20, 0.5), (0.32, 0.5), (0.40, 0.5), False),
             ("2", "wrist_elbow_misstacking", 130.0, 0.5, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False),
-            ("3", "raising_too_high", 110.0, 0.5, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False),
+            ("3", "raising_too_high", 115.0, 0.5, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False),
             ("4", "elbow_flare", 130.0, 0.5, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False),
             ("5", "insufficient_depth", 140.0, 0.6, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False),
         ]
@@ -68,6 +70,113 @@ class TestTechniqueFaultDetection(unittest.TestCase):
                 tracker.rep_elapsed = elapsed
                 tracker._update_technique_state(angle, p_n, v_n, d_n, swinging)
                 self.assertIn(expected_fault, tracker.technique_state["faults"])
+
+    def test_front_view_squat_knee_collapse_detected(self):
+        tracker = RepTracker("center", EXERCISES["5"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.7
+        frame = build_kinematics_frame(named_landmark_dict({
+            "left_shoulder": (0.40, 0.28),
+            "right_shoulder": (0.60, 0.28),
+            "left_hip": (0.44, 0.52),
+            "right_hip": (0.56, 0.52),
+            "left_knee": (0.49, 0.72),
+            "right_knee": (0.51, 0.72),
+            "left_ankle": (0.40, 0.90),
+            "right_ankle": (0.60, 0.90),
+        }), side="both")
+
+        tracker._update_technique_state(118.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), False, landmarks=frame)
+
+        self.assertIn("knee_collapse", tracker.technique_state["faults"])
+        self.assertEqual(tracker.technique_state["view"], "front")
+
+    def test_side_view_squat_forward_lean_detected(self):
+        tracker = RepTracker("center", EXERCISES["5"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.7
+        frame = build_kinematics_frame(named_landmark_dict({
+            "left_shoulder": (0.48, 0.30),
+            "right_shoulder": (0.52, 0.31),
+            "left_hip": (0.49, 0.56),
+            "right_hip": (0.53, 0.57),
+            "left_knee": (0.56, 0.72),
+            "right_knee": (0.58, 0.73),
+            "left_ankle": (0.64, 0.89),
+            "right_ankle": (0.66, 0.90),
+        }), side="both")
+
+        tracker._update_technique_state(118.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), False, landmarks=frame)
+
+        self.assertIn("excessive_forward_lean", tracker.technique_state["faults"])
+        self.assertEqual(tracker.technique_state["view"], "side")
+
+    def test_lateral_raise_overheight_uses_config_threshold(self):
+        tracker = RepTracker("right", EXERCISES["3"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.5
+
+        tracker._update_technique_state(100.0, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False)
+        self.assertNotIn("raising_too_high", tracker.technique_state["faults"])
+
+        tracker._update_technique_state(115.0, (0.30, 0.5), (0.40, 0.5), (0.56, 0.5), False)
+        self.assertIn("raising_too_high", tracker.technique_state["faults"])
+
+    def test_tricep_shoulder_drift_detected(self):
+        tracker = RepTracker("right", EXERCISES["4"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.6
+        frame = build_kinematics_frame(named_landmark_dict({
+            "left_shoulder": (0.48, 0.30),
+            "right_shoulder": (0.52, 0.30),
+            "left_hip": (0.49, 0.58),
+            "right_hip": (0.53, 0.58),
+            "right_elbow": (0.68, 0.40),
+            "right_wrist": (0.72, 0.57),
+        }), side="right")
+
+        tracker._update_technique_state(150.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), False, landmarks=frame)
+
+        self.assertIn("shoulder_drift", tracker.technique_state["faults"])
+
+    def test_bicep_drift_no_longer_depends_on_raw_x_offset(self):
+        tracker = RepTracker("right", EXERCISES["1"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.6
+        frame = build_kinematics_frame(named_landmark_dict({
+            "left_shoulder": (0.42, 0.31),
+            "right_shoulder": (0.50, 0.30),
+            "left_hip": (0.44, 0.62),
+            "right_hip": (0.51, 0.62),
+            "right_elbow": (0.579, 0.33),  # x drift stays below the old 0.08 cutoff
+            "right_wrist": (0.61, 0.48),
+        }), side="right")
+
+        tracker._update_technique_state(95.0, (0.50, 0.30), (0.579, 0.33), (0.61, 0.48), False, landmarks=frame)
+
+        self.assertIn("upper_arm_drift", tracker.technique_state["faults"])
+
+    def test_low_confidence_suppresses_risky_faults(self):
+        tracker = RepTracker("center", EXERCISES["5"], CFG)
+        tracker.stage = "start"
+        tracker.rep_elapsed = 0.7
+        frame = build_kinematics_frame(named_landmark_dict({
+            "left_shoulder": (0.48, 0.30, 0.0, 0.2, 0.2),
+            "right_shoulder": (0.52, 0.31, 0.0, 0.2, 0.2),
+            "left_hip": (0.49, 0.56, 0.0, 0.2, 0.2),
+            "right_hip": (0.53, 0.57, 0.0, 0.2, 0.2),
+            "left_knee": (0.56, 0.72, 0.0, 0.2, 0.2),
+            "right_knee": (0.58, 0.73, 0.0, 0.2, 0.2),
+            "left_ankle": (0.64, 0.89, 0.0, 0.2, 0.2),
+            "right_ankle": (0.66, 0.90, 0.0, 0.2, 0.2),
+        }, default_visibility=0.2, default_presence=0.2), side="both")
+
+        tracker._update_technique_state(118.0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), False, landmarks=frame)
+
+        self.assertNotIn("excessive_forward_lean", tracker.technique_state["faults"])
+        self.assertTrue(
+            tracker.technique_state["fault_evaluations"]["excessive_forward_lean"]["suppressed"]
+        )
 
 
 class TestTechniqueFeedbackSelection(unittest.TestCase):
@@ -107,7 +216,7 @@ class TestTechniqueFeedbackSelection(unittest.TestCase):
 
         self.assertEqual(msgs, [])
 
-    def test_unmapped_or_view_unreliable_fault_is_not_coached(self):
+    def test_new_knee_collapse_fault_is_coached(self):
         exercise = EXERCISES["5"]
         tracker = _StubTracker(
             side="center",
@@ -119,7 +228,8 @@ class TestTechniqueFeedbackSelection(unittest.TestCase):
             [tracker], [None], [False], exercise, _Voice(), CFG, "en", qualities=["GOOD"]
         )
 
-        self.assertEqual(msgs, [])
+        self.assertTrue(msgs)
+        self.assertIn("knees", msgs[0][0].lower())
 
 
 if __name__ == "__main__":

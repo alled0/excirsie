@@ -8,7 +8,9 @@ Pose analysis helpers for Taharrak.
   build_post_rep_summary  — single-line post-rep verdict
 """
 
+from taharrak.config import get_threshold, normalize_exercise_name
 from taharrak.exercises.base import Exercise
+from taharrak.kinematics.confidence import landmark_reliability as _landmark_reliability
 from taharrak.messages import t
 
 
@@ -24,15 +26,20 @@ _FAULT_RULES = {
         "wrist_elbow_misstacking": ("stack_wrists_over_elbows", "warning", "secondary_signals"),
     },
     "3": {
+        "shrugging": ("shoulders_down", "warning", "secondary_signals"),
         "raising_too_high": ("raise_to_shoulder_height", "warning", "primary_signal"),
+        "elbow_collapse": ("keep_soft_bend", "warning", "secondary_signals"),
     },
     "4": {
         "elbow_flare": ("keep_elbows_in", "warning", "secondary_signals"),
+        "shoulder_drift": ("keep_shoulders_still", "warning", "secondary_signals"),
+        "excessive_lean_back": ("dont_lean_back", "error", "secondary_signals"),
         "incomplete_extension": ("finish_extension", "warning", "primary_signal"),
     },
     "5": {
         "insufficient_depth": ("sit_deeper", "warning", "primary_signal"),
         "excessive_forward_lean": ("chest_up", "warning", "secondary_signals"),
+        "knee_collapse": ("knees_over_toes", "error", "secondary_signals"),
     },
 }
 
@@ -60,9 +67,7 @@ def joint_reliability(lm) -> float:
     This ensures backward compatibility with any code that only sets
     ``visibility``.
     """
-    vis  = getattr(lm, 'visibility', 1.0)
-    pres = getattr(lm, 'presence',   None)
-    return vis if pres is None else min(vis, pres)
+    return _landmark_reliability(lm)
 
 
 # ── Detection quality ─────────────────────────────────────────────────────────
@@ -203,7 +208,7 @@ def _format_profile_cue(lang: str, cue_key: str, side_ln: str, bilateral: bool) 
 
 
 def _profile_feedback(tracker, angle: float | None, exercise: Exercise,
-                      quality: str | None, lang: str) -> tuple[str, str] | None:
+                      quality: str | None, lang: str, cfg: dict | None = None) -> tuple[str, str] | None:
     profile = exercise.technique_profile
     if profile is None:
         return None
@@ -235,7 +240,15 @@ def _profile_feedback(tracker, angle: float | None, exercise: Exercise,
         cue_key = "curl_higher"
     elif exercise.key == "2" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle < end_range[0]:
         cue_key = "finish_overhead"
-    elif exercise.key == "3" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle > end_range[1] + 5.0:
+    elif (
+        exercise.key == "3" and tracker.stage == "start" and tracker.rep_elapsed > 0.35
+        and angle > get_threshold(
+            normalize_exercise_name(exercise.key),
+            "overheight_warn_deg",
+            cfg or {},
+            default=end_range[1] + 5.0,
+        )
+    ):
         cue_key = "raise_to_shoulder_height"
     elif exercise.key == "4" and tracker.stage == "start" and tracker.rep_elapsed > 0.35 and angle < end_range[0]:
         cue_key = "finish_extension"
@@ -294,7 +307,7 @@ def build_msgs(trackers: list, angles: list, swings: list,
         side_ln = sides_ln[i]  if i < 2 else ""
         quality = qualities[i] if qualities is not None and i < len(qualities) else None
 
-        profile_msg = _profile_feedback(tracker, angle, exercise, quality, lang)
+        profile_msg = _profile_feedback(tracker, angle, exercise, quality, lang, cfg)
         if profile_msg is not None:
             candidates.append((*profile_msg, None))
 

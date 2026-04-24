@@ -22,6 +22,7 @@ import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+from taharrak.config     import load_config as _shared_load_config
 from taharrak.exercises  import EXERCISES
 from taharrak.tracker    import (RepTracker, VoiceEngine, OneEuroLandmarkSmoother,
                                  TrackingGuard, LiveTrustGate, LiveDiagnostics)
@@ -56,31 +57,7 @@ def ensure_model():
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def load_config(path="config.json") -> dict:
-    defaults = {
-        "angle_down": 160, "angle_up": 45,
-        "swing_threshold": 0.025, "swing_window": 15,
-        "vis_good": 0.68, "vis_weak": 0.38,
-        "rest_duration": 60, "countdown_secs": 3,
-        "score_flash_duration": 2.5, "symmetry_warn_ratio": 0.15,
-        "summary_auto_close": 12, "target_reps": 12,
-        "ideal_rep_time": 2.5, "min_rep_time": 1.2,
-        "mirror_mode": True, "voice_enabled": True, "voice_rate": 160,
-        "confidence_smoother_window": 10, "fatigue_score_gap": 20,
-        "overload_sessions_needed": 3, "overload_min_avg_score": 75,
-        "overload_step_kg": 2.5, "weight_step_kg": 2.5,
-        "weight_min_kg": 0.0, "weight_max_kg": 200.0,
-        "db_path": "~/.taharrak/sessions.db",
-        "arabic_font_path": "assets/Noto_Naskh_Arabic/static/NotoNaskhArabic-Regular.ttf",
-        "default_language": "en",
-        "warmup_mode": True,
-        "landmark_smooth_window": 7,
-        "segmentation_enabled": True,
-        "segmentation_bg_color": [10, 10, 25],
-    }
-    if os.path.exists(path):
-        with open(path) as f:
-            defaults.update(json.load(f))
-    return defaults
+    return _shared_load_config(path)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -339,7 +316,8 @@ def main():
                             if trust.counting_sides[0]:
                                 swing_lm = lm[exercise.swing_joint_left]
                                 ang, sw, done, sc = trackers[0].update(
-                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup,
+                                    landmarks=lm)
                                 angles[0], swings[0] = ang, sw
                                 ui.arc_gauge(display,
                                              lm_px[exercise.joints_left[exercise.arc_joint_idx]],
@@ -359,7 +337,8 @@ def main():
                             if trust.counting_sides[1]:
                                 swing_lm = lm[exercise.swing_joint_right]
                                 ang, sw, done, sc = trackers[1].update(
-                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup,
+                                    landmarks=lm)
                                 angles[1], swings[1] = ang, sw
                                 ui.arc_gauge(display,
                                              lm_px[exercise.joints_right[exercise.arc_joint_idx]],
@@ -391,7 +370,8 @@ def main():
                             if trust.counting_sides[0]:
                                 swing_lm = lm[exercise.swing_joint_right]
                                 ang, sw, done, sc = trackers[0].update(
-                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup)
+                                    lm[a], lm[b], lm[c], swing_lm, w, h, warmup,
+                                    landmarks=lm)
                                 angles[0], swings[0] = ang, sw
                                 ui.arc_gauge(display,
                                              lm_px[exercise.joints_right[exercise.arc_joint_idx]],

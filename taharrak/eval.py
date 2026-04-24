@@ -47,6 +47,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from taharrak.config import load_config as _shared_load_config
+
 MODEL_PATH = "pose_landmarker_lite.task"
 MODEL_URL  = (
     "https://storage.googleapis.com/mediapipe-models/"
@@ -64,21 +66,7 @@ def _ensure_model() -> None:
 
 def _load_cfg(path: Optional[str]) -> dict:
     """Load config.json (if present) and merge with hard-coded defaults."""
-    defaults = {
-        "vis_good": 0.68, "vis_weak": 0.38,
-        "swing_threshold": 0.025, "swing_window": 15,
-        "min_rep_time": 1.2, "ideal_rep_time": 2.5,
-        "one_euro_min_cutoff": 1.5, "one_euro_beta": 0.007,
-        "one_euro_d_cutoff": 1.0, "camera_fps": 30,
-        "confidence_smoother_window": 10, "fatigue_score_gap": 20,
-        "fsm_recovery_frames": 3, "fsm_max_lost_frames": 15,
-        "landmark_smooth_window": 7,
-    }
-    cfg_path = path or "config.json"
-    if os.path.exists(cfg_path):
-        with open(cfg_path) as f:
-            defaults.update(json.load(f))
-    return defaults
+    return _shared_load_config(path or "config.json")
 
 
 # ── Core replay function ───────────────────────────────────────────────────────
@@ -205,7 +193,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_left]
                     ang, _, done, _ = trackers[0].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h, now=frame_time_s)
+                        swing_lm, w, h, now=frame_time_s, landmarks=lm_smooth)
                     angle_history[0].append(ang)
                     if prev_angles[0] is not None:
                         angle_deltas[0].append(abs(ang - prev_angles[0]))
@@ -218,7 +206,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_right]
                     ang, _, done, _ = trackers[1].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h, now=frame_time_s)
+                        swing_lm, w, h, now=frame_time_s, landmarks=lm_smooth)
                     angle_history[1].append(ang)
                     if prev_angles[1] is not None:
                         angle_deltas[1].append(abs(ang - prev_angles[1]))
@@ -231,7 +219,7 @@ def replay_video(video_path: str, exercise_key: str,
                     swing_lm  = lm_smooth[exercise.swing_joint_right]
                     ang, _, done, _ = trackers[0].update(
                         lm_smooth[a], lm_smooth[b], lm_smooth[c],
-                        swing_lm, w, h, now=frame_time_s)
+                        swing_lm, w, h, now=frame_time_s, landmarks=lm_smooth)
                     angle_history[0].append(ang)
                     if prev_angles[0] is not None:
                         angle_deltas[0].append(abs(ang - prev_angles[0]))

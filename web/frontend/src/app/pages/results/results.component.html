@@ -1,0 +1,151 @@
+<div class="max-w-3xl mx-auto px-4 py-12" *ngIf="result">
+
+  <!-- Header -->
+  <div class="mb-8">
+    <a routerLink="/analyze" class="text-sm text-blue-600 hover:underline">&larr; Analyse another video</a>
+    <h1 class="text-3xl font-bold mt-3">{{ result.exerciseName }} results</h1>
+  </div>
+
+  <!-- Top stats row -->
+  <div class="grid sm:grid-cols-3 gap-4 mb-8">
+    <!-- Rep count -->
+    <div class="card text-center">
+      <p class="text-5xl font-bold text-gray-900">{{ result.repsTotal }}</p>
+      <p class="text-gray-500 text-sm mt-1">Reps counted</p>
+      <div *ngIf="result.repsLeft !== undefined" class="text-xs text-gray-400 mt-2">
+        L {{ result.repsLeft }} &nbsp;/&nbsp; R {{ result.repsRight }}
+      </div>
+    </div>
+
+    <!-- Signal quality -->
+    <div class="card text-center">
+      <p class="text-5xl font-bold" [ngClass]="qualityColor">
+        {{ result.signalQuality | percent:'1.0-0' }}
+      </p>
+      <p class="text-gray-500 text-sm mt-1">Signal quality</p>
+      <p class="text-xs mt-2" [ngClass]="qualityColor">{{ qualityLabel }}</p>
+    </div>
+
+    <!-- Detection rate -->
+    <div class="card text-center">
+      <p class="text-5xl font-bold text-gray-900">
+        {{ 1 - result.dropoutRate | percent:'1.0-0' }}
+      </p>
+      <p class="text-gray-500 text-sm mt-1">Detection rate</p>
+      <p class="text-xs text-gray-400 mt-2">{{ result.framesDetected }} / {{ result.framesTotal }} frames</p>
+    </div>
+  </div>
+
+  <!-- Detailed metrics -->
+  <div class="card mb-8">
+    <h2 class="font-semibold text-gray-800 mb-4">Detailed metrics</h2>
+    <dl class="divide-y divide-gray-100">
+
+      <div class="flex justify-between py-2.5 text-sm">
+        <dt class="text-gray-600">Mean joint reliability</dt>
+        <dd class="font-medium">{{ result.meanReliability | percent:'1.0-1' }}</dd>
+      </div>
+
+      <div class="flex justify-between py-2.5 text-sm">
+        <dt class="text-gray-600">Unknown-stage rate</dt>
+        <dd class="font-medium" [ngClass]="result.unknownRate > 0.2 ? 'text-yellow-600' : ''">
+          {{ result.unknownRate | percent:'1.0-1' }}
+        </dd>
+      </div>
+
+      <div class="flex justify-between py-2.5 text-sm">
+        <dt class="text-gray-600">Reps discarded (lost visibility)</dt>
+        <dd class="font-medium" [ngClass]="result.abortedReps > 0 ? 'text-yellow-600' : ''">
+          {{ result.abortedReps }}
+        </dd>
+      </div>
+
+      <div class="flex justify-between py-2.5 text-sm">
+        <dt class="text-gray-600">Reps rejected (too fast)</dt>
+        <dd class="font-medium" [ngClass]="result.rejectedReps > 0 ? 'text-yellow-600' : ''">
+          {{ result.rejectedReps }}
+        </dd>
+      </div>
+
+      <div class="flex justify-between py-2.5 text-sm">
+        <dt class="text-gray-600">Processing speed</dt>
+        <dd class="font-medium">{{ result.fpsMean | number:'1.0-1' }} fps</dd>
+      </div>
+
+    </dl>
+  </div>
+
+  <!-- Quality guidance -->
+  <div *ngIf="result.signalQuality < 0.65" class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-8 text-sm text-yellow-800">
+    <p class="font-medium mb-1">Signal quality is low — here are some tips:</p>
+    <ul class="list-disc list-inside space-y-1 text-yellow-700">
+      <li *ngIf="result.dropoutRate > 0.3">More than a third of frames had no pose detected. Try better lighting or a less cluttered background.</li>
+      <li *ngIf="result.unknownRate > 0.3">The tracker spent a lot of time uncertain about your stage. Make sure your full body is clearly visible.</li>
+      <li>Film from a side or front angle with your whole body in frame.</li>
+    </ul>
+  </div>
+
+  <!-- Feedback form -->
+  <div class="card">
+    <h2 class="font-semibold text-gray-800 mb-1">Was this useful?</h2>
+    <p class="text-gray-500 text-sm mb-4">Your feedback helps improve the analysis over time.</p>
+
+    <ng-container *ngIf="!feedbackSubmitted; else thanks">
+
+      <!-- Star rating -->
+      <div class="flex gap-1 mb-4">
+        <button
+          *ngFor="let s of stars"
+          class="text-2xl transition-transform hover:scale-110"
+          [class.opacity-30]="rating < s"
+          (click)="setRating(s)"
+        >⭐</button>
+      </div>
+
+      <!-- Was rep count accurate? -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Was the rep count accurate?</label>
+        <div class="flex gap-3">
+          <button
+            class="px-4 py-2 rounded-lg border text-sm font-medium transition-colors"
+            [ngClass]="wasAccurate ? 'bg-green-50 border-green-400 text-green-700' : 'border-gray-300 text-gray-600'"
+            (click)="wasAccurate = true"
+          >Yes</button>
+          <button
+            class="px-4 py-2 rounded-lg border text-sm font-medium transition-colors"
+            [ngClass]="!wasAccurate ? 'bg-red-50 border-red-400 text-red-700' : 'border-gray-300 text-gray-600'"
+            (click)="wasAccurate = false"
+          >No</button>
+        </div>
+      </div>
+
+      <!-- Comment -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Any other comments? (optional)</label>
+        <textarea
+          [(ngModel)]="comment"
+          rows="3"
+          placeholder="e.g. missed the last rep, wrong exercise detected…"
+          class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        ></textarea>
+      </div>
+
+      <div *ngIf="feedbackError" class="text-red-600 text-sm mb-3">{{ feedbackError }}</div>
+
+      <button
+        class="btn-primary"
+        [disabled]="rating === 0"
+        (click)="submitFeedback()"
+      >Send feedback</button>
+
+    </ng-container>
+
+    <ng-template #thanks>
+      <div class="text-center py-4">
+        <p class="text-2xl mb-2">🙏</p>
+        <p class="font-medium text-gray-800">Thanks — that helps a lot!</p>
+      </div>
+    </ng-template>
+  </div>
+
+</div>

@@ -38,10 +38,41 @@
 
     "fsm_recovery_frames": 3,
     "fsm_max_lost_frames": 15,
+    "legacy_upper_arm_offset_warn_norm": 0.08,
+    "legacy_wrist_elbow_offset_warn_norm": 0.10,
 
     "guard_max_low_rel_frames": 20,
     "guard_bbox_jump": 0.25,
     "guard_scale_jump": 0.30,
     "guard_recovery_window": 5.0,
-    "guard_max_recoveries": 4
+    "guard_max_recoveries": 4,
+
+    "exercise_thresholds": {
+        "squat": {
+            "trunk_tibia_warn_deg": 10.0,
+            "knee_valgus_warn_deg": 10.0,
+            "depth_min_knee_flexion_deg": 90.0,
+            "full_depth_knee_flexion_deg": 110.0
+        },
+        "bicep_curl": {
+            "upper_arm_flexion_warn_deg": 30.0,
+            "trunk_swing_warn_deg": 15.0
+        },
+        "shoulder_press": {
+            "lumbar_extension_warn_deg": 10.0,
+            "lockout_elbow_angle_min_deg": 165.0,
+            "wrist_elbow_alignment_warn_deg": 20.0
+        },
+        "lateral_raise": {
+            "overheight_warn_deg": 110.0,
+            "elbow_collapse_warn_deg": 35.0,
+            "shrug_warn_ratio": null
+        },
+        "tricep_extension": {
+            "lumbar_extension_warn_deg": 10.0,
+            "elbow_flare_warn_deg": 30.0,
+            "shoulder_drift_warn_deg": 15.0,
+            "lockout_elbow_angle_min_deg": 160.0
+        }
+    }
 }
