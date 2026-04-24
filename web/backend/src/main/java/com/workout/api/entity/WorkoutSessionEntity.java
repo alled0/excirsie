@@ -68,6 +68,7 @@ public class WorkoutSessionEntity {
     @Convert(converter = StringListConverter.class)
     private List<String> cameraIssues = new ArrayList<>();
 
+    @Column(name = "duration_s")
     private Integer durationS;
 
     @Column(nullable = false, updatable = false)

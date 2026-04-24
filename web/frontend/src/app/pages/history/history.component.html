@@ -16,7 +16,7 @@
 
   <!-- Error -->
   <div *ngIf="error" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm">
-    Could not load history — make sure the model service is running.
+    Could not load history — make sure the backend is running.
   </div>
 
   <!-- Empty state -->
@@ -44,11 +44,11 @@
         <tr *ngFor="let r of records" class="hover:bg-gray-50 transition-colors">
 
           <td class="px-4 py-3 text-gray-500 whitespace-nowrap">
-            {{ r.timestamp | date:'dd MMM, HH:mm' }}
+            {{ r.createdAt | date:'dd MMM, HH:mm' }}
           </td>
 
           <td class="px-4 py-3 font-medium text-gray-900">
-            {{ r.exercise_name }}
+            {{ r.exerciseName }}
           </td>
 
           <td class="px-4 py-3 text-center">
@@ -63,26 +63,26 @@
           </td>
 
           <td class="px-4 py-3 text-center font-semibold text-gray-900">
-            {{ r.reps_total }}
-            <span *ngIf="r.reps_left !== null && r.reps_left !== undefined"
+            {{ r.repsTotal }}
+            <span *ngIf="r.repsLeft !== null && r.repsLeft !== undefined"
                   class="block text-xs text-gray-400 font-normal">
-              L {{ r.reps_left }} / R {{ r.reps_right }}
+              L {{ r.repsLeft }} / R {{ r.repsRight }}
             </span>
           </td>
 
           <td class="px-4 py-3 text-center">
-            <span [ngClass]="qualityClass(r.signal_quality)" class="font-medium">
-              {{ r.signal_quality !== null ? (r.signal_quality | percent:'1.0-0') : '—' }}
+            <span [ngClass]="qualityClass(r.signalQuality)" class="font-medium">
+              {{ r.signalQuality !== null ? (r.signalQuality | percent:'1.0-0') : '—' }}
             </span>
-            <span class="block text-xs" [ngClass]="qualityClass(r.signal_quality)">
-              {{ qualityLabel(r.signal_quality) }}
+            <span class="block text-xs" [ngClass]="qualityClass(r.signalQuality)">
+              {{ qualityLabel(r.signalQuality) }}
             </span>
           </td>
 
           <td class="px-4 py-3 text-center text-gray-500">
-            <ng-container *ngIf="r.frames_total; else noCoverage">
-              {{ (r.frames_detected ?? 0) / r.frames_total | percent:'1.0-0' }}
-              <span class="block text-xs text-gray-400">{{ r.frames_detected }}/{{ r.frames_total }}</span>
+            <ng-container *ngIf="r.framesTotal; else noCoverage">
+              {{ (r.framesDetected ?? 0) / r.framesTotal | percent:'1.0-0' }}
+              <span class="block text-xs text-gray-400">{{ r.framesDetected }}/{{ r.framesTotal }}</span>
             </ng-container>
             <ng-template #noCoverage>—</ng-template>
           </td>

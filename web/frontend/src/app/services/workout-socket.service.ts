@@ -1,6 +1,14 @@
 import { Injectable, NgZone } from '@angular/core';
 import { Subject } from 'rxjs';
 
+export interface PoseLandmark {
+  x: number;
+  y: number;
+  z?: number;
+  visibility?: number;
+  presence?: number;
+}
+
 export interface LiveFeedback {
   detected: boolean;
   reps_total: number;
@@ -10,6 +18,7 @@ export interface LiveFeedback {
   feedback: string;
   severity: 'ok' | 'warning' | 'error';
   angles?: (number | null)[];
+  landmarks?: PoseLandmark[];
 }
 
 @Injectable({ providedIn: 'root' })

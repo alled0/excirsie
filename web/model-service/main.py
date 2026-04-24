@@ -180,6 +180,19 @@ def _processing_path_summary(trackers: list) -> tuple[str, list[str]]:
     return "mixed", paths
 
 
+def _serialize_landmarks(landmarks) -> list[dict]:
+    return [
+        {
+            "x": round(float(point.x), 6),
+            "y": round(float(point.y), 6),
+            "z": round(float(getattr(point, "z", 0.0)), 6),
+            "visibility": round(float(getattr(point, "visibility", 0.0)), 6),
+            "presence": round(float(getattr(point, "presence", 1.0)), 6),
+        }
+        for point in landmarks
+    ]
+
+
 def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) -> dict:
     exercise = session["exercise"]
     trackers = session["trackers"]
@@ -270,6 +283,7 @@ def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) ->
             for evaluation in getattr(tracker, "last_fault_evaluations", ())
             if evaluation.suppressed
         ] for tracker in trackers],
+        "landmarks": _serialize_landmarks(lm),
     }
 
 
@@ -306,6 +320,7 @@ def _process_frame(session: dict, jpeg_bytes: bytes) -> dict:
             "phases": [],
             "faults": [],
             "suppressed_faults": [],
+            "landmarks": [],
         }
     return _process_landmarks(session, result.pose_landmarks[0], (w, h))
 

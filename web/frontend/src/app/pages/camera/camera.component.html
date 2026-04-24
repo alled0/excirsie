@@ -44,7 +44,12 @@
       ></video>
 
       <!-- Hidden canvas used only for capturing frames — never displayed -->
-      <canvas #canvasEl class="hidden"></canvas>
+      <canvas #captureCanvasEl class="hidden"></canvas>
+
+      <canvas
+        #overlayCanvasEl
+        class="absolute inset-0 w-full h-full object-cover pointer-events-none scale-x-[-1]"
+      ></canvas>
 
       <!-- Rep counter — top right -->
       <div *ngIf="sessionActive" class="absolute top-3 right-3 bg-black/60 text-white rounded-xl px-4 py-2 text-center min-w-[72px]">
@@ -77,6 +82,19 @@
         <p class="text-white text-lg font-medium">Press Start when ready</p>
       </div>
 
+    </div>
+
+    <div class="flex items-center justify-between mb-4 px-1">
+      <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          [(ngModel)]="showSkeleton"
+          (change)="onSkeletonToggle()"
+        />
+        Show joints and skeleton
+      </label>
+      <span class="text-xs text-gray-400">Overlay uses backend pose landmarks</span>
     </div>
 
     <!-- Controls row -->

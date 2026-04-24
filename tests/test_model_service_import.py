@@ -75,6 +75,7 @@ class TestModelServiceImport(unittest.TestCase):
         self.assertEqual(response["processing_path"], "kinematics")
         self.assertTrue(all(path == "kinematics" for path in response["processing_paths"]))
         self.assertEqual(len(response["phases"]), 2)
+        self.assertEqual(len(response["landmarks"]), 33)
         self.assertTrue(any("raising_too_high" in faults for faults in response["faults"]))
         self.assertIn("shoulder height", response["feedback"].lower())
 
@@ -89,6 +90,7 @@ class TestModelServiceImport(unittest.TestCase):
         )
 
         self.assertEqual(response["processing_path"], "kinematics")
+        self.assertEqual(len(response["landmarks"]), 33)
         self.assertFalse(any("raising_too_high" in faults for faults in response["faults"]))
 
 

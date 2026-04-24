@@ -73,6 +73,7 @@ web/frontend/.angular/
 # Spring Boot backend
 web/backend/target/
 web/backend/data/
+web/backend/backend-run.*
 
 # Docker
 web/backend/*.jar

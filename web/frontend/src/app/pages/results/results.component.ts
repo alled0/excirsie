@@ -64,11 +64,10 @@ export class ResultsComponent implements OnInit {
     if (!this.result || this.rating === 0) return;
 
     this.api.submitFeedback({
-      exerciseKey:  this.result.exerciseKey,
-      repsDetected: this.result.repsTotal,
-      rating:       this.rating,
-      wasAccurate:  this.wasAccurate,
-      comment:      this.comment,
+      exerciseKey:      this.result.exerciseKey,
+      rating:           this.rating,
+      repCountAccurate: this.wasAccurate,
+      comment:          this.comment,
     }).subscribe({
       next: () => {
         this.feedbackSubmitted = true;

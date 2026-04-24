@@ -8,7 +8,11 @@ import { NgFor, NgIf, NgClass } from '@angular/common';
 import { Subscription } from 'rxjs';
 
 import { ApiService } from '../../services/api.service';
-import { WorkoutSocketService, LiveFeedback } from '../../services/workout-socket.service';
+import {
+  WorkoutSocketService,
+  LiveFeedback,
+  PoseLandmark,
+} from '../../services/workout-socket.service';
 import { Exercise } from '../../models/exercise.model';
 
 @Component({
@@ -19,10 +23,12 @@ import { Exercise } from '../../models/exercise.model';
 })
 export class CameraComponent implements OnInit, OnDestroy {
   @ViewChild('videoEl', { static: false }) videoEl!: ElementRef<HTMLVideoElement>;
-  @ViewChild('canvasEl', { static: false }) canvasEl!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('captureCanvasEl', { static: false }) captureCanvasEl!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('overlayCanvasEl', { static: false }) overlayCanvasEl!: ElementRef<HTMLCanvasElement>;
 
   exercises: Exercise[] = [];
   selectedKey = '';
+  showSkeleton = true;
 
   cameraActive = false;
   sessionActive = false;
@@ -38,6 +44,17 @@ export class CameraComponent implements OnInit, OnDestroy {
 
   // Target send rate — 10 fps is enough for meaningful feedback without flooding the socket
   private readonly CAPTURE_MS = 100;
+  private readonly MIN_DRAW_VISIBILITY = 0.2;
+  private readonly SKELETON_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
+    [0, 2], [0, 5], [2, 7], [5, 8],
+    [9, 10],
+    [11, 12],
+    [11, 13], [13, 15], [15, 17], [15, 19], [15, 21],
+    [12, 14], [14, 16], [16, 18], [16, 20], [16, 22],
+    [11, 23], [12, 24], [23, 24],
+    [23, 25], [25, 27], [27, 29], [29, 31],
+    [24, 26], [26, 28], [28, 30], [30, 32],
+  ];
 
   constructor(
     private api: ApiService,
@@ -61,7 +78,10 @@ export class CameraComponent implements OnInit, OnDestroy {
     );
 
     this.subs.add(
-      this.socket.feedback$.subscribe((fb) => (this.feedback = fb))
+      this.socket.feedback$.subscribe((fb) => {
+        this.feedback = fb;
+        this.drawOverlay();
+      })
     );
   }
 
@@ -75,7 +95,13 @@ export class CameraComponent implements OnInit, OnDestroy {
       this.cameraActive = true;
       // Wait one tick for @ViewChild to bind after *ngIf becomes true
       setTimeout(() => {
-        this.videoEl.nativeElement.srcObject = this.stream;
+        const video = this.videoEl.nativeElement;
+        video.srcObject = this.stream;
+        video.onloadedmetadata = () => {
+          void video.play().catch(() => undefined);
+          this.syncOverlayCanvas();
+          this.clearOverlay();
+        };
       }, 0);
     } catch {
       this.permissionDenied = true;
@@ -85,6 +111,7 @@ export class CameraComponent implements OnInit, OnDestroy {
   startSession(): void {
     if (!this.selectedKey || !this.cameraActive) return;
     this.feedback = null;
+    this.clearOverlay();
     this.socket.connect(this.selectedKey);
     this.sessionActive = true;
     this.captureInterval = setInterval(() => this.captureAndSend(), this.CAPTURE_MS);
@@ -97,14 +124,18 @@ export class CameraComponent implements OnInit, OnDestroy {
     }
     this.socket.disconnect();
     this.sessionActive = false;
+    this.clearOverlay();
 
     // Save the session to history if any reps were counted
     if (this.feedback && this.feedback.reps_total > 0) {
-      this.api.saveLiveSession({
-        exercise_key:  this.selectedKey,
-        reps_total:    this.feedback.reps_total,
-        reps_left:     this.feedback.reps_left ?? null,
-        reps_right:    this.feedback.reps_right ?? null,
+      const exerciseName = this.exercises.find((e) => e.key === this.selectedKey)?.name ?? '';
+      this.api.saveSession({
+        exerciseKey:  this.selectedKey,
+        exerciseName: exerciseName,
+        source:       'live',
+        repsTotal:    this.feedback.reps_total,
+        repsLeft:     this.feedback.reps_left  ?? null,
+        repsRight:    this.feedback.reps_right ?? null,
       }).subscribe();
     }
   }
@@ -115,11 +146,12 @@ export class CameraComponent implements OnInit, OnDestroy {
     this.stream = null;
     this.cameraActive = false;
     this.feedback = null;
+    this.clearOverlay();
   }
 
   private captureAndSend(): void {
     const video  = this.videoEl?.nativeElement;
-    const canvas = this.canvasEl?.nativeElement;
+    const canvas = this.captureCanvasEl?.nativeElement;
     if (!video || !canvas || video.readyState < 2) return;
 
     const ctx = canvas.getContext('2d');
@@ -127,6 +159,7 @@ export class CameraComponent implements OnInit, OnDestroy {
 
     canvas.width  = video.videoWidth  || 640;
     canvas.height = video.videoHeight || 480;
+    this.syncOverlayCanvas();
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     canvas.toBlob(
@@ -134,6 +167,10 @@ export class CameraComponent implements OnInit, OnDestroy {
       'image/jpeg',
       0.7,  // 70% quality — good balance between detail and bandwidth
     );
+  }
+
+  onSkeletonToggle(): void {
+    this.drawOverlay();
   }
 
   get severityClass(): string {
@@ -150,6 +187,95 @@ export class CameraComponent implements OnInit, OnDestroy {
       case 'WEAK': return 'bg-yellow-400';
       default:     return 'bg-red-400';
     }
+  }
+
+  private syncOverlayCanvas(): void {
+    const video = this.videoEl?.nativeElement;
+    const overlay = this.overlayCanvasEl?.nativeElement;
+    if (!video || !overlay) return;
+
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+    if (overlay.width !== width) overlay.width = width;
+    if (overlay.height !== height) overlay.height = height;
+  }
+
+  private clearOverlay(): void {
+    const overlay = this.overlayCanvasEl?.nativeElement;
+    if (!overlay) return;
+    this.syncOverlayCanvas();
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+  }
+
+  private drawOverlay(): void {
+    const overlay = this.overlayCanvasEl?.nativeElement;
+    const video = this.videoEl?.nativeElement;
+    if (!overlay || !video) return;
+
+    this.syncOverlayCanvas();
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (
+      !this.showSkeleton ||
+      !this.sessionActive ||
+      !this.feedback?.detected ||
+      !this.feedback.landmarks?.length
+    ) {
+      return;
+    }
+
+    const landmarks = this.feedback.landmarks;
+    const lineWidth = Math.max(2, overlay.width / 320);
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.82)';
+    ctx.lineWidth = lineWidth;
+
+    for (const [fromIndex, toIndex] of this.SKELETON_CONNECTIONS) {
+      const start = landmarks[fromIndex];
+      const end = landmarks[toIndex];
+      if (!this.isDrawable(start) || !this.isDrawable(end)) {
+        continue;
+      }
+      ctx.globalAlpha = Math.min(this.landmarkAlpha(start), this.landmarkAlpha(end));
+      ctx.beginPath();
+      ctx.moveTo(start.x * overlay.width, start.y * overlay.height);
+      ctx.lineTo(end.x * overlay.width, end.y * overlay.height);
+      ctx.stroke();
+    }
+
+    for (const landmark of landmarks) {
+      if (!this.isDrawable(landmark)) {
+        continue;
+      }
+      const x = landmark.x * overlay.width;
+      const y = landmark.y * overlay.height;
+      ctx.globalAlpha = this.landmarkAlpha(landmark);
+      ctx.fillStyle = 'rgba(250, 204, 21, 0.95)';
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(3, lineWidth * 0.95), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  private isDrawable(landmark?: PoseLandmark): landmark is PoseLandmark {
+    return !!landmark && this.landmarkScore(landmark) >= this.MIN_DRAW_VISIBILITY;
+  }
+
+  private landmarkScore(landmark: PoseLandmark): number {
+    return Math.min(landmark.visibility ?? 1, landmark.presence ?? 1);
+  }
+
+  private landmarkAlpha(landmark: PoseLandmark): number {
+    return Math.max(0.35, Math.min(1, this.landmarkScore(landmark)));
   }
 
   ngOnDestroy(): void {

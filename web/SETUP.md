@@ -34,7 +34,7 @@ cd web/backend
 mvn spring-boot:run
 ```
 
-Runs on **port 8080**. Feedback is stored in `web/backend/data/feedback-db.mv.db`.
+Runs on **port 8080**. Local backend data is stored in `web/backend/data/workout-dev.mv.db`.
 
 To point at a remote model service, set the env var:
 ```bash
@@ -91,4 +91,4 @@ GET http://localhost:8080/api/feedback?exerciseKey=1
 ```
 
 The embedded H2 console (for quick inspection during dev) is at:
-`http://localhost:8080/h2-console`  — JDBC URL: `jdbc:h2:file:./data/feedback-db`
+`http://localhost:8080/h2-console`  — JDBC URL: `jdbc:h2:file:./data/workout-dev`

@@ -5,11 +5,13 @@ import com.workout.api.entity.AnonymousUserEntity;
 import com.workout.api.entity.RepLogEntity;
 import com.workout.api.entity.WorkoutSessionEntity;
 import com.workout.api.repository.AnonymousUserRepository;
+import com.workout.api.repository.RepLogRepository;
 import com.workout.api.repository.WorkoutSessionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -20,11 +22,14 @@ public class SessionService {
 
     private final WorkoutSessionRepository sessionRepo;
     private final AnonymousUserRepository  userRepo;
+    private final RepLogRepository         repLogRepo;
 
     public SessionService(WorkoutSessionRepository sessionRepo,
-                          AnonymousUserRepository userRepo) {
+                          AnonymousUserRepository userRepo,
+                          RepLogRepository repLogRepo) {
         this.sessionRepo = sessionRepo;
         this.userRepo    = userRepo;
+        this.repLogRepo  = repLogRepo;
     }
 
     @Transactional
@@ -52,7 +57,6 @@ public class SessionService {
         session.setCameraIssues(req.cameraIssues != null ? req.cameraIssues : List.of());
         session.setDurationS(req.durationS);
 
-        // Save session first so rep_logs can reference its ID
         sessionRepo.save(session);
 
         if (req.repLogs != null && !req.repLogs.isEmpty()) {
@@ -77,10 +81,7 @@ public class SessionService {
                 })
                 .collect(Collectors.toList());
 
-            // Persist rep logs via cascade — session already saved, just need to add them
-            repLogs.forEach(r -> sessionRepo.save(session));
-            // Use entity manager via a simple approach: save each rep through a separate call
-            // (RepLogRepository is injected via a helper if needed — kept simple here)
+            repLogRepo.saveAll(repLogs);
         }
 
         return session;
@@ -96,20 +97,21 @@ public class SessionService {
     }
 
     private Map<String, Object> toSummaryMap(WorkoutSessionEntity s) {
-        return Map.ofEntries(
-            Map.entry("id",               s.getId()),
-            Map.entry("exerciseKey",      s.getExerciseKey()),
-            Map.entry("exerciseName",     s.getExerciseName()),
-            Map.entry("source",           s.getSource()),
-            Map.entry("repsTotal",        s.getRepsTotal()),
-            Map.entry("repsLeft",         s.getRepsLeft()         != null ? s.getRepsLeft()         : ""),
-            Map.entry("repsRight",        s.getRepsRight()        != null ? s.getRepsRight()        : ""),
-            Map.entry("signalQuality",    s.getSignalQuality()    != null ? s.getSignalQuality()    : ""),
-            Map.entry("dropoutRate",      s.getDropoutRate()      != null ? s.getDropoutRate()      : ""),
-            Map.entry("meanReliability",  s.getMeanReliability()  != null ? s.getMeanReliability()  : ""),
-            Map.entry("framesTotal",      s.getFramesTotal()      != null ? s.getFramesTotal()      : ""),
-            Map.entry("framesDetected",   s.getFramesDetected()   != null ? s.getFramesDetected()   : ""),
-            Map.entry("createdAt",        s.getCreatedAt().toString())
-        );
+        // HashMap allows null values — Map.ofEntries does not
+        Map<String, Object> m = new HashMap<>();
+        m.put("id",              s.getId());
+        m.put("exerciseKey",     s.getExerciseKey());
+        m.put("exerciseName",    s.getExerciseName());
+        m.put("source",          s.getSource());
+        m.put("repsTotal",       s.getRepsTotal());
+        m.put("repsLeft",        s.getRepsLeft());
+        m.put("repsRight",       s.getRepsRight());
+        m.put("signalQuality",   s.getSignalQuality());
+        m.put("dropoutRate",     s.getDropoutRate());
+        m.put("meanReliability", s.getMeanReliability());
+        m.put("framesTotal",     s.getFramesTotal());
+        m.put("framesDetected",  s.getFramesDetected());
+        m.put("createdAt",       s.getCreatedAt().toString());
+        return m;
     }
 }
