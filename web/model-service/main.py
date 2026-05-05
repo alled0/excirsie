@@ -26,8 +26,21 @@ import numpy as np
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-# Resolve project root: web/model-service/ -> web/ -> project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+def _resolve_project_root() -> Path:
+    """Find the repo root both locally and inside the Docker image.
+
+    Local path:   repo/web/model-service/main.py -> repo
+    Docker path:  /app/main.py with /app/taharrak copied beside it
+    """
+    here = Path(__file__).resolve().parent
+    candidates = (here, here.parent.parent, Path.cwd())
+    for candidate in candidates:
+        if (candidate / "taharrak").is_dir():
+            return candidate
+    return here
+
+
+PROJECT_ROOT = _resolve_project_root()
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
@@ -46,6 +59,23 @@ app.add_middleware(
 )
 
 _cfg = _load_cfg(None)
+
+
+def _analysis_cfg() -> dict:
+    cfg = dict(_cfg)
+    target_fps = os.getenv("TAHARRAK_ANALYSIS_TARGET_FPS")
+    max_width = os.getenv("TAHARRAK_ANALYSIS_MAX_WIDTH")
+    if target_fps:
+        try:
+            cfg["analysis_target_fps"] = float(target_fps)
+        except ValueError:
+            pass
+    if max_width:
+        try:
+            cfg["analysis_max_width"] = int(max_width)
+        except ValueError:
+            pass
+    return cfg
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
@@ -88,7 +118,7 @@ async def process_video(
         with open(video_path, "wb") as f:
             shutil.copyfileobj(video.file, f)
 
-        metrics = replay_video(video_path, exercise_key=exercise_key, cfg=_cfg)
+        metrics = replay_video(video_path, exercise_key=exercise_key, cfg=_analysis_cfg())
 
         return {
             "success": True,
@@ -148,7 +178,7 @@ def _build_live_session(exercise_key: str) -> dict:
     base_opts = mp_python.BaseOptions(model_asset_path="pose_landmarker_lite.task")
     options = vision.PoseLandmarkerOptions(
         base_options=base_opts,
-        running_mode=vision.RunningMode.IMAGE,
+        running_mode=vision.RunningMode.VIDEO,
         num_poses=1,
         min_pose_detection_confidence=0.48,
         min_pose_presence_confidence=0.48,
@@ -167,6 +197,7 @@ def _build_live_session(exercise_key: str) -> dict:
         "frames_detected": 0,
         "reliability_sum": 0.0,
         "start_time": time.time(),
+        "last_timestamp_ms": -1,
     }
 
 
@@ -204,6 +235,9 @@ def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) ->
     session["frames_total"] += 1
     session["frames_detected"] += 1
 
+    # Rep logic benefits from smoothing, but overlay landmarks should remain raw
+    # so the skeleton does not visibly trail behind the live camera body.
+    lm_raw = landmarks
     lm = smoother.smooth(landmarks) if smoother is not None else landmarks
 
     from taharrak.analysis import joint_reliability
@@ -283,13 +317,14 @@ def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) ->
             for evaluation in getattr(tracker, "last_fault_evaluations", ())
             if evaluation.suppressed
         ] for tracker in trackers],
-        "landmarks": _serialize_landmarks(lm),
+        "landmarks": _serialize_landmarks(lm_raw),
     }
 
 
 def _process_frame(session: dict, jpeg_bytes: bytes) -> dict:
     import mediapipe as mp
 
+    started = time.time()
     landmarker = session["landmarker"]
 
     arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
@@ -301,7 +336,11 @@ def _process_frame(session: dict, jpeg_bytes: bytes) -> dict:
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
-    result = landmarker.detect(mp_img)
+    timestamp_ms = int((time.time() - session["start_time"]) * 1000)
+    if timestamp_ms <= session["last_timestamp_ms"]:
+        timestamp_ms = session["last_timestamp_ms"] + 1
+    session["last_timestamp_ms"] = timestamp_ms
+    result = landmarker.detect_for_video(mp_img, timestamp_ms)
 
     if not result.pose_landmarks:
         session["frames_total"] += 1
@@ -321,8 +360,11 @@ def _process_frame(session: dict, jpeg_bytes: bytes) -> dict:
             "faults": [],
             "suppressed_faults": [],
             "landmarks": [],
+            "server_processing_ms": round((time.time() - started) * 1000, 1),
         }
-    return _process_landmarks(session, result.pose_landmarks[0], (w, h))
+    feedback = _process_landmarks(session, result.pose_landmarks[0], (w, h))
+    feedback["server_processing_ms"] = round((time.time() - started) * 1000, 1)
+    return feedback
 
 
 @app.websocket("/ws/live/{exercise_key}")

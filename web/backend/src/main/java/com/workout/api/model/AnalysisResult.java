@@ -1,5 +1,6 @@
 package com.workout.api.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
@@ -10,19 +11,33 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public class AnalysisResult {
 
     private boolean success;
+    @JsonAlias("exercise_key")
     private String exerciseKey;
+    @JsonAlias("exercise_name")
     private String exerciseName;
+    @JsonAlias("reps_total")
     private int repsTotal;
+    @JsonAlias("reps_left")
     private Integer repsLeft;
+    @JsonAlias("reps_right")
     private Integer repsRight;
+    @JsonAlias("signal_quality")
     private double signalQuality;
+    @JsonAlias("dropout_rate")
     private double dropoutRate;
+    @JsonAlias("mean_reliability")
     private double meanReliability;
+    @JsonAlias("unknown_rate")
     private double unknownRate;
+    @JsonAlias("aborted_reps")
     private int abortedReps;
+    @JsonAlias("rejected_reps")
     private int rejectedReps;
+    @JsonAlias("frames_total")
     private int framesTotal;
+    @JsonAlias("frames_detected")
     private int framesDetected;
+    @JsonAlias("fps_mean")
     private double fpsMean;
 
     // -- Getters and setters --------------------------------------------------

@@ -69,6 +69,44 @@ def _load_cfg(path: Optional[str]) -> dict:
     return _shared_load_config(path or "config.json")
 
 
+def _positive_float(value, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _resolve_replay_options(cfg: dict, source_fps: float) -> dict:
+    """Resolve upload/offline video speed knobs."""
+    source_fps = _positive_float(source_fps, 30.0)
+    target_fps = _positive_float(cfg.get("analysis_target_fps"), source_fps)
+    max_width = _positive_int(cfg.get("analysis_max_width"), 0)
+
+    if target_fps >= source_fps:
+        frame_step = 1
+        effective_fps = source_fps
+    else:
+        frame_step = max(1, int(round(source_fps / target_fps)))
+        effective_fps = source_fps / frame_step
+
+    return {
+        "source_fps": source_fps,
+        "target_fps": target_fps,
+        "frame_step": frame_step,
+        "effective_fps": effective_fps,
+        "max_width": max_width,
+    }
+
+
 # ── Core replay function ───────────────────────────────────────────────────────
 
 def replay_video(video_path: str, exercise_key: str,
@@ -99,9 +137,14 @@ def replay_video(video_path: str, exercise_key: str,
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    replay_options = _resolve_replay_options(cfg, cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    video_fps = replay_options["source_fps"]
+    effective_fps = replay_options["effective_fps"]
+    frame_step = replay_options["frame_step"]
+    max_width = replay_options["max_width"]
+
     cfg = dict(cfg)
-    cfg["camera_fps"] = video_fps   # use actual video FPS for filters
+    cfg["camera_fps"] = effective_fps   # use processed-video FPS for filters
 
     # Build trackers (same logic as main loop)
     if exercise.bilateral:
@@ -114,7 +157,7 @@ def replay_video(video_path: str, exercise_key: str,
 
     smoother = OneEuroLandmarkSmoother(
         num_landmarks = 33,
-        freq          = video_fps,
+        freq          = effective_fps,
         min_cutoff    = cfg.get("one_euro_min_cutoff", 1.5),
         beta          = cfg.get("one_euro_beta",       0.007),
     )
@@ -149,21 +192,36 @@ def replay_video(video_path: str, exercise_key: str,
     unknown_frames   = 0
 
     wall_start = time.time()
-    frame_idx  = 0
+    source_frame_idx = 0
+    frames_read = 0
 
     with vision.PoseLandmarker.create_from_options(options) as landmarker:
         while True:
-            ok, frame = cap.read()
+            ok = cap.grab()
+            if not ok:
+                break
+            current_source_idx = source_frame_idx
+            source_frame_idx += 1
+            frames_read += 1
+
+            if current_source_idx % frame_step != 0:
+                continue
+
+            ok, frame = cap.retrieve()
             if not ok:
                 break
             frames_total += 1
 
+            if max_width and frame.shape[1] > max_width:
+                scale = max_width / frame.shape[1]
+                new_size = (max_width, max(1, int(round(frame.shape[0] * scale))))
+                frame = cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
+
             rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            frame_time_s = frame_idx / video_fps
+            frame_time_s = current_source_idx / video_fps
             ts     = int(frame_time_s * 1000)
             result = landmarker.detect_for_video(mp_img, ts)
-            frame_idx += 1
 
             if not result.pose_landmarks:
                 # No detection — signal LOST to all trackers
@@ -250,8 +308,13 @@ def replay_video(video_path: str, exercise_key: str,
         "video":            os.path.basename(video_path),
         "exercise":         exercise.name,
         "exercise_key":     exercise_key,
+        "frames_read":      frames_read,
         "frames_total":     frames_total,
         "frames_detected":  frames_detected,
+        "source_fps":       round(video_fps, 2),
+        "analysis_fps":     round(effective_fps, 2),
+        "frame_step":       frame_step,
+        "analysis_max_width": max_width,
         "dropout_rate":     dropout_rate,
         "angle_delta_mean": round(_mean(all_deltas), 3),
         "angle_delta_p95":  round(_p95(all_deltas), 3),

@@ -40,10 +40,15 @@ export class CameraComponent implements OnInit, OnDestroy {
 
   private stream: MediaStream | null = null;
   private captureInterval: ReturnType<typeof setInterval> | null = null;
+  private overlayStaleTimer: ReturnType<typeof setTimeout> | null = null;
+  private captureBusy = false;
   private subs = new Subscription();
 
-  // Target send rate — 10 fps is enough for meaningful feedback without flooding the socket
-  private readonly CAPTURE_MS = 100;
+  // Target send rate. Backpressure in the socket service drops stale frames.
+  private readonly CAPTURE_MS = 80;
+  private readonly CAPTURE_MAX_WIDTH = 360;
+  private readonly JPEG_QUALITY = 0.55;
+  private readonly OVERLAY_STALE_MS = 350;
   private readonly MIN_DRAW_VISIBILITY = 0.2;
   private readonly SKELETON_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
     [0, 2], [0, 5], [2, 7], [5, 8],
@@ -81,6 +86,7 @@ export class CameraComponent implements OnInit, OnDestroy {
       this.socket.feedback$.subscribe((fb) => {
         this.feedback = fb;
         this.drawOverlay();
+        this.scheduleOverlayExpiry();
       })
     );
   }
@@ -150,22 +156,32 @@ export class CameraComponent implements OnInit, OnDestroy {
   }
 
   private captureAndSend(): void {
-    const video  = this.videoEl?.nativeElement;
+    const video = this.videoEl?.nativeElement;
     const canvas = this.captureCanvasEl?.nativeElement;
-    if (!video || !canvas || video.readyState < 2) return;
+    if (!video || !canvas || video.readyState < 2 || this.captureBusy) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width  = video.videoWidth  || 640;
-    canvas.height = video.videoHeight || 480;
-    this.syncOverlayCanvas();
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const videoWidth = video.videoWidth || 640;
+    const videoHeight = video.videoHeight || 480;
+    const scale = Math.min(1, this.CAPTURE_MAX_WIDTH / videoWidth);
+    const captureWidth = Math.max(1, Math.round(videoWidth * scale));
+    const captureHeight = Math.max(1, Math.round(videoHeight * scale));
 
+    if (canvas.width !== captureWidth) canvas.width = captureWidth;
+    if (canvas.height !== captureHeight) canvas.height = captureHeight;
+    this.syncOverlayCanvas();
+    ctx.drawImage(video, 0, 0, captureWidth, captureHeight);
+
+    this.captureBusy = true;
     canvas.toBlob(
-      (blob) => { if (blob) this.socket.sendFrame(blob); },
+      (blob) => {
+        this.captureBusy = false;
+        if (blob) this.socket.sendFrame(blob);
+      },
       'image/jpeg',
-      0.7,  // 70% quality — good balance between detail and bandwidth
+      this.JPEG_QUALITY,
     );
   }
 
@@ -201,12 +217,28 @@ export class CameraComponent implements OnInit, OnDestroy {
   }
 
   private clearOverlay(): void {
+    if (this.overlayStaleTimer) {
+      clearTimeout(this.overlayStaleTimer);
+      this.overlayStaleTimer = null;
+    }
+
     const overlay = this.overlayCanvasEl?.nativeElement;
     if (!overlay) return;
     this.syncOverlayCanvas();
     const ctx = overlay.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, overlay.width, overlay.height);
+  }
+
+  private scheduleOverlayExpiry(): void {
+    if (this.overlayStaleTimer) {
+      clearTimeout(this.overlayStaleTimer);
+    }
+
+    this.overlayStaleTimer = setTimeout(() => {
+      this.overlayStaleTimer = null;
+      this.clearOverlay();
+    }, this.OVERLAY_STALE_MS);
   }
 
   private drawOverlay(): void {
@@ -280,6 +312,10 @@ export class CameraComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopCamera();
+    if (this.overlayStaleTimer) {
+      clearTimeout(this.overlayStaleTimer);
+      this.overlayStaleTimer = null;
+    }
     this.subs.unsubscribe();
   }
 }

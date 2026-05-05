@@ -9,6 +9,10 @@ web/
 └── frontend/        TypeScript (Angular) — the browser app
 ```
 
+For the short daily run commands, see `RUN_EACH_TIME.md`.
+For the production deployment plan, see `DEPLOYMENT.md`.
+For the remaining cloud values and secrets, see `CREDENTIALS_TODO.md`.
+
 ---
 
 ## Local development (no Docker)
@@ -74,10 +78,7 @@ docker compose up --build
 - Backend  → http://localhost:8080  (Spring Boot)
 - Model    → http://localhost:8081  (FastAPI, internal only)
 
-For a cloud deployment, push all three images to a registry and update
-`docker-compose.yml` to use them, or deploy each service to its preferred
-runtime (e.g. Cloud Run for Python, App Engine / ECS for Java, Vercel/Netlify
-for the static Angular build).
+For a cloud deployment, use the production plan in `DEPLOYMENT.md`.
 
 ---
 

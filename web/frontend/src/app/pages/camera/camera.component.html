@@ -7,7 +7,7 @@
 
   <!-- Error loading exercises -->
   <div *ngIf="loadError" class="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 text-sm">
-    Could not load exercises — make sure the backend is running.
+    Could not load exercises - make sure the backend is running.
   </div>
 
   <!-- Step 1: exercise picker (shown when camera is not yet active) -->
@@ -43,7 +43,7 @@
         class="w-full h-full object-cover scale-x-[-1]"
       ></video>
 
-      <!-- Hidden canvas used only for capturing frames — never displayed -->
+      <!-- Hidden canvas used only for capturing frames - never displayed -->
       <canvas #captureCanvasEl class="hidden"></canvas>
 
       <canvas
@@ -51,7 +51,7 @@
         class="absolute inset-0 w-full h-full object-cover pointer-events-none scale-x-[-1]"
       ></canvas>
 
-      <!-- Rep counter — top right -->
+      <!-- Rep counter - top right -->
       <div *ngIf="sessionActive" class="absolute top-3 right-3 bg-black/60 text-white rounded-xl px-4 py-2 text-center min-w-[72px]">
         <div class="text-4xl font-bold leading-none">{{ feedback?.reps_total ?? 0 }}</div>
         <div class="text-xs text-gray-300 mt-1">reps</div>
@@ -62,13 +62,13 @@
         </div>
       </div>
 
-      <!-- Quality dot — top left -->
+      <!-- Quality dot - top left -->
       <div *ngIf="sessionActive" class="absolute top-3 left-3 flex items-center gap-1.5 bg-black/60 rounded-full px-3 py-1">
         <span class="w-2.5 h-2.5 rounded-full" [ngClass]="qualityDot"></span>
-        <span class="text-white text-xs">{{ feedback?.quality ?? '…' }}</span>
+        <span class="text-white text-xs">{{ feedback?.quality ?? '...' }}</span>
       </div>
 
-      <!-- Form feedback banner — bottom -->
+      <!-- Form feedback banner - bottom -->
       <div
         *ngIf="sessionActive && feedback?.feedback"
         class="absolute bottom-0 left-0 right-0 px-4 py-3 text-center text-sm font-semibold transition-colors"
@@ -94,7 +94,7 @@
         />
         Show joints and skeleton
       </label>
-      <span class="text-xs text-gray-400">Overlay uses backend pose landmarks</span>
+      <span class="text-xs text-gray-400">Low-latency backend overlay</span>
     </div>
 
     <!-- Controls row -->
@@ -124,8 +124,8 @@
     <!-- Connection status -->
     <p class="text-xs text-gray-400 mt-2 text-center">
       <ng-container *ngIf="sessionActive">
-        <span *ngIf="connected" class="text-green-600">● Connected</span>
-        <span *ngIf="!connected" class="text-yellow-500">● Connecting…</span>
+        <span *ngIf="connected" class="text-green-600">Connected</span>
+        <span *ngIf="!connected" class="text-yellow-500">Connecting...</span>
       </ng-container>
     </p>
 
@@ -135,9 +135,9 @@
   <div class="card mt-6 text-sm text-gray-600">
     <p class="font-medium text-gray-800 mb-2">Tips for best results</p>
     <ul class="space-y-1">
-      <li>✓ Stand 1.5–2 m from the camera so your full body is in frame.</li>
-      <li>✓ Good lighting — face a window, not your back to it.</li>
-      <li>✓ Keep the device still and at roughly shoulder height.</li>
+      <li>Stand 1.5-2 m from the camera so your full body is in frame.</li>
+      <li>Good lighting - face a window, not your back to it.</li>
+      <li>Keep the device still and at roughly shoulder height.</li>
     </ul>
   </div>
 

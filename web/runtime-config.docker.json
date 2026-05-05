@@ -1,0 +1,5 @@
+{
+  "apiBase": "/api",
+  "modelBase": "/api",
+  "wsBase": "/ws"
+}

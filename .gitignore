@@ -8,6 +8,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.cache/
 dist/
 build/
 .eggs/
@@ -34,18 +38,49 @@ workout_*.csv
 # IDE
 .vscode/
 .idea/
+*.iml
+*.code-workspace
+.classpath
+.project
+.settings/
 *.suo
 *.user
+.github/java-upgrade/
 
 # OS
 .DS_Store
 Thumbs.db
 desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+*~
 
 # Secrets / keys
 .env
+.env.local
+.env.*.local
+.firebaserc
+.firebase/
+firebase.generated.json
+.runtimeconfig.json
+credentials.json
+credentials.*.json
+secrets.json
+secrets.*.json
+service-account*.json
+*service-account*.json
+*serviceAccount*.json
+firebase-adminsdk*.json
+google-application-credentials*.json
+application_default_credentials.json
+client_secret*.json
+oauth_client*.json
 *.pem
 *.key
+*.p12
+*.pfx
+*.crt
+*.cer
 
 # Test / coverage artifacts
 pytest-cache-files-*/
@@ -53,31 +88,66 @@ pytest-cache-files-*/
 .coverage.*
 coverage.xml
 htmlcov/
+test-results/
+playwright-report/
+junit.xml
 
 # Local runtime data
 data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/*.mv.db
+*.mv.db
+*.trace.db
+*.lock.db
 *.log
+hs_err_pid*.log
+replay_pid*.log
+*.tmp
+*.temp
+*.bak
+*.dump
+*.backup
+tmp/
+temp/
 
 # Research files
 Researchs/
 Reasearchs/
 
+# Local study notes / generated reports
+docs/taharrak_ai_learning_report.md
+
 # Angular frontend
 web/frontend/node_modules/
 web/frontend/dist/
 web/frontend/.angular/
+web/frontend/src/assets/runtime-config.json
+web/frontend/npm-debug.log*
+web/frontend/yarn-debug.log*
+web/frontend/yarn-error.log*
+web/frontend/pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Spring Boot backend
 web/backend/target/
 web/backend/data/
 web/backend/backend-run.*
+web/backend/*.log
+web/deploy.local.ps1
+web/deploy.generated.ps1
+web/deploy.env
+web/*.generated.ps1
 
 # Docker
 web/backend/*.jar
+docker-compose.override.yml
+web/docker-compose.override.yml
 
 # Python model service (venv if created inside the folder)
 web/model-service/.venv/
 web/model-service/venv/
+web/model-service/*.log

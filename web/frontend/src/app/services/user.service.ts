@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { BehaviorSubject, firstValueFrom } from 'rxjs';
+import { RuntimeConfigService } from './runtime-config.service';
 
 interface ResolvedUser {
   userId: string;
@@ -17,7 +18,10 @@ export class UserService {
     localStorage.getItem(USER_ID_KEY)
   );
 
-  constructor(private http: HttpClient) {}
+  constructor(
+    private http: HttpClient,
+    private runtimeConfig: RuntimeConfigService,
+  ) {}
 
   get userId(): string | null {
     return this.userId$.value;
@@ -37,7 +41,7 @@ export class UserService {
 
     try {
       const res = await firstValueFrom(
-        this.http.post<ResolvedUser>('/api/users/resolve', { token })
+        this.http.post<ResolvedUser>(`${this.runtimeConfig.apiBase}/users/resolve`, { token })
       );
       localStorage.setItem(TOKEN_KEY,   res.token);
       localStorage.setItem(USER_ID_KEY, res.userId);

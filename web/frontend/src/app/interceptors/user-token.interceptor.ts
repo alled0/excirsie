@@ -1,5 +1,6 @@
 import { HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
+import { RuntimeConfigService } from '../services/runtime-config.service';
 import { UserService } from '../services/user.service';
 
 /**
@@ -8,10 +9,12 @@ import { UserService } from '../services/user.service';
  */
 export const userTokenInterceptor: HttpInterceptorFn = (req, next) => {
   const userService = inject(UserService);
+  const runtimeConfig = inject(RuntimeConfigService);
   const userId      = userService.userId;
+  const apiBase = runtimeConfig.apiBase;
 
   // Only attach to backend API calls, and skip the resolve call itself
-  if (userId && req.url.includes('/api/') && !req.url.includes('/api/users/resolve')) {
+  if (userId && req.url.includes(`${apiBase}/`) && !req.url.includes(`${apiBase}/users/resolve`)) {
     return next(req.clone({ setHeaders: { 'X-User-Id': userId } }));
   }
 

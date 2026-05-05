@@ -1,0 +1,81 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      REGION: ${{ secrets.GCP_REGION }}
+      ARTIFACT_REPO: ${{ secrets.GCP_ARTIFACT_REPO }}
+      MODEL_SERVICE_NAME: ${{ secrets.MODEL_SERVICE_NAME }}
+      BACKEND_SERVICE_NAME: ${{ secrets.BACKEND_SERVICE_NAME }}
+      MODEL_SERVICE_URL: ${{ secrets.MODEL_SERVICE_URL }}
+      DB_URL: ${{ secrets.DB_URL }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASS_SECRET: ${{ secrets.DB_PASS_SECRET }}
+      APP_CORS_ALLOWED_ORIGINS: ${{ secrets.APP_CORS_ALLOWED_ORIGINS }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: Package backend
+        working-directory: web/backend
+        run: mvn -B clean package
+
+      - name: Build and push images
+        run: |
+          MODEL_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REPO/model-service:${GITHUB_SHA}"
+          BACKEND_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REPO/backend:${GITHUB_SHA}"
+          docker build -f web/model-service/Dockerfile -t "$MODEL_IMAGE" .
+          docker build -f web/backend/Dockerfile -t "$BACKEND_IMAGE" web/backend
+          docker push "$MODEL_IMAGE"
+          docker push "$BACKEND_IMAGE"
+          echo "MODEL_IMAGE=$MODEL_IMAGE" >> "$GITHUB_ENV"
+          echo "BACKEND_IMAGE=$BACKEND_IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy model service
+        run: |
+          gcloud run deploy "$MODEL_SERVICE_NAME" \
+            --image "$MODEL_IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --allow-unauthenticated \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 3600
+
+      - name: Deploy backend
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE_NAME" \
+            --image "$BACKEND_IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --allow-unauthenticated \
+            --memory 1Gi \
+            --cpu 1 \
+            --timeout 600 \
+            --set-env-vars "SPRING_PROFILES_ACTIVE=prod,MODEL_SERVICE_URL=$MODEL_SERVICE_URL,DB_URL=$DB_URL,DB_USER=$DB_USER,APP_CORS_ALLOWED_ORIGINS=$APP_CORS_ALLOWED_ORIGINS" \
+            --set-secrets "DB_PASS=$DB_PASS_SECRET"

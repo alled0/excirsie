@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 
 import { Exercise } from '../models/exercise.model';
 import { AnalysisResult } from '../models/analysis.model';
+import { RuntimeConfigService } from './runtime-config.service';
 
 export interface FeedbackPayload {
   sessionId?: string;
@@ -68,35 +69,32 @@ export interface ErrorPayload {
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
-  // Analysis calls go directly to the Python service (pure computation, no auth needed)
-  private readonly modelBase = 'http://localhost:8081';
-
-  // Session history, feedback, events, errors go through Spring Boot (persisted, user-linked)
-  private readonly apiBase = '/api';
-
-  constructor(private http: HttpClient) {}
+  constructor(
+    private http: HttpClient,
+    private runtimeConfig: RuntimeConfigService,
+  ) {}
 
   getExercises(): Observable<Exercise[]> {
-    return this.http.get<Exercise[]>(`${this.modelBase}/exercises`);
+    return this.http.get<Exercise[]>(`${this.runtimeConfig.modelBase}/exercises`);
   }
 
   analyzeVideo(file: File, exerciseKey: string): Observable<AnalysisResult> {
     const form = new FormData();
     form.append('video', file, file.name);
-    form.append('exercise_key', exerciseKey);
-    return this.http.post<AnalysisResult>(`${this.modelBase}/process`, form);
+    form.append('exerciseKey', exerciseKey);
+    return this.http.post<AnalysisResult>(`${this.runtimeConfig.modelBase}/analyze`, form);
   }
 
   saveSession(payload: SaveSessionPayload): Observable<{ sessionId: string }> {
-    return this.http.post<{ sessionId: string }>(`${this.apiBase}/sessions`, payload);
+    return this.http.post<{ sessionId: string }>(`${this.runtimeConfig.apiBase}/sessions`, payload);
   }
 
   getHistory(): Observable<HistoryRecord[]> {
-    return this.http.get<HistoryRecord[]>(`${this.apiBase}/sessions`);
+    return this.http.get<HistoryRecord[]>(`${this.runtimeConfig.apiBase}/sessions`);
   }
 
   submitFeedback(payload: FeedbackPayload): Observable<{ message: string }> {
-    return this.http.post<{ message: string }>(`${this.apiBase}/feedback`, payload);
+    return this.http.post<{ message: string }>(`${this.runtimeConfig.apiBase}/feedback`, payload);
   }
 
   trackEvents(events: EventPayload[]): void {
@@ -105,11 +103,11 @@ export class ApiService {
       occurredAt: e.occurredAt ?? new Date().toISOString(),
       properties: JSON.stringify(e.properties ?? {}),
     }));
-    this.http.post(`${this.apiBase}/events`, { events: stamped }).subscribe();
+    this.http.post(`${this.runtimeConfig.apiBase}/events`, { events: stamped }).subscribe();
   }
 
   reportError(payload: ErrorPayload): void {
-    this.http.post(`${this.apiBase}/errors`, {
+    this.http.post(`${this.runtimeConfig.apiBase}/errors`, {
       ...payload,
       occurredAt: payload.occurredAt ?? new Date().toISOString(),
     }).subscribe();

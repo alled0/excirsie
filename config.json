@@ -32,6 +32,9 @@
     "segmentation_enabled": true,
     "segmentation_bg_color": [10, 10, 25],
 
+    "analysis_target_fps": 15,
+    "analysis_max_width": 720,
+
     "one_euro_min_cutoff": 1.5,
     "one_euro_beta": 0.007,
     "one_euro_d_cutoff": 1.0,
