@@ -185,6 +185,10 @@ class CorrectionEngine:
 
         The caller is responsible for enforcing one-cue policy across
         bilateral trackers via pick_one_correction().
+
+        TODO: wire into bicep_curl_counter.py main loop for live mid-rep
+        coaching, OR remove after Phase 4 if build_msgs() continues to
+        serve that role. Track usage before deciding.
         """
         if quality == "LOST":
             return None

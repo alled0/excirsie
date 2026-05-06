@@ -30,6 +30,7 @@ env/
 
 # Workout CSV exports
 workout_*.csv
+events_*.csv
 
 # Taharrak user data
 ~/.taharrak/
@@ -110,6 +111,9 @@ replay_pid*.log
 *.backup
 tmp/
 temp/
+
+# Eval harness output
+results.json
 
 # Research files
 Researchs/

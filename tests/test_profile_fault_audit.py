@@ -1,6 +1,5 @@
 import unittest
 
-from taharrak.analysis import _FAULT_RULES
 from taharrak.config import get_threshold, merge_config
 from taharrak.correction import FAULT_PRIORITY
 from taharrak.exercises import EXERCISES
@@ -26,13 +25,25 @@ class TestProfileFaultAudit(unittest.TestCase):
             for rule in rules:
                 with self.subTest(exercise=key, fault=rule.fault):
                     self.assertIn(rule.fault, FAULT_PRIORITY)
-                    self.assertIn(rule.fault, _FAULT_RULES[key])
-                    cue_key = rule.message_key or _FAULT_RULES[key][rule.fault][0]
-                    self.assertIn(cue_key, MESSAGES["en"])
-                    self.assertIn(cue_key, MESSAGES["ar"])
+                    # message_key is the single source of truth now that _FAULT_RULES
+                    # in analysis.py has been removed and severity/signal_kind live on FaultRule.
+                    self.assertIsNotNone(rule.message_key,
+                                         f"{rule.fault} has no message_key on its FaultRule")
+                    self.assertIn(rule.message_key, MESSAGES["en"])
+                    self.assertIn(rule.message_key, MESSAGES["ar"])
                     if rule.threshold_key is not None and rule.fault != "shrugging":
                         threshold = get_threshold(rule.exercise, rule.threshold_key, cfg)
                         self.assertIsInstance(threshold, float)
+
+    def test_fault_rules_have_severity_and_signal_kind(self):
+        """Every FaultRule now carries severity and signal_kind for the HUD layer."""
+        valid_severities = {"error", "warning"}
+        valid_kinds = {"primary_signal", "secondary_signals"}
+        for key, rules in FAULT_RULES.items():
+            for rule in rules:
+                with self.subTest(exercise=key, fault=rule.fault):
+                    self.assertIn(rule.severity, valid_severities)
+                    self.assertIn(rule.signal_kind, valid_kinds)
 
 
 if __name__ == "__main__":

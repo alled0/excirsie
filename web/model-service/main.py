@@ -148,11 +148,6 @@ async def process_video(
 
 # ── Real-time WebSocket session ───────────────────────────────────────────────
 
-class _NoopVoice:
-    def say(self, text: str, cooldown: float = 0.0) -> None:
-        pass
-
-
 def _build_live_session(exercise_key: str) -> dict:
     import mediapipe as mp
     from mediapipe.tasks import python as mp_python
@@ -160,7 +155,13 @@ def _build_live_session(exercise_key: str) -> dict:
 
     exercise = EXERCISES[exercise_key]
     cfg = dict(_cfg)
-    cfg["camera_fps"] = 30
+    # The Angular client captures at ~12.5 fps (80 ms interval, one in-flight).
+    # Setting the nominal filter frequency to match reduces One Euro Filter lag.
+    # Override via TAHARRAK_LIVE_FPS env var if the client capture rate changes.
+    try:
+        cfg["camera_fps"] = float(os.getenv("TAHARRAK_LIVE_FPS", "15"))
+    except ValueError:
+        cfg["camera_fps"] = 15.0
 
     trackers = (
         [RepTracker("left", exercise, cfg), RepTracker("right", exercise, cfg)]
@@ -192,7 +193,6 @@ def _build_live_session(exercise_key: str) -> dict:
         "smoother": smoother,
         "landmarker": vision.PoseLandmarker.create_from_options(options),
         "cfg": cfg,
-        "voice": _NoopVoice(),
         "frames_total": 0,
         "frames_detected": 0,
         "reliability_sum": 0.0,
@@ -229,7 +229,6 @@ def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) ->
     trackers = session["trackers"]
     smoother = session.get("smoother")
     cfg = session["cfg"]
-    voice = session["voice"]
     w, h = frame_size
 
     session["frames_total"] += 1
@@ -292,7 +291,7 @@ def _process_landmarks(session: dict, landmarks, frame_size: tuple[int, int]) ->
 
     msgs = build_msgs(
         trackers=trackers, angles=angles, swings=swings,
-        exercise=exercise, voice=voice, cfg=cfg, lang="en", qualities=qualities,
+        exercise=exercise, cfg=cfg, lang="en", qualities=qualities,
     )
     processing_path, processing_paths = _processing_path_summary(trackers)
 

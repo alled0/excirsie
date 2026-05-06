@@ -212,11 +212,6 @@ class TestCheckExerciseFraming(unittest.TestCase):
 
 # ── build_msgs semantic output tests ────────────────────────────────────────
 
-class _MockVoice:
-    """No-op voice stub."""
-    def say(self, *a, **kw):
-        pass
-
 
 class _StubTracker:
     """Minimal tracker stub sufficient for build_msgs."""
@@ -234,8 +229,7 @@ class TestBuildMsgsSemantics(unittest.TestCase):
     """build_msgs must return (str, severity_str) — no BGR colour tuples."""
 
     def _call(self, trackers, angles, swings):
-        return build_msgs(trackers, angles, swings,
-                          BICEP_CURL, _MockVoice(), _CFG_MSGS, "en")
+        return build_msgs(trackers, angles, swings, BICEP_CURL, _CFG_MSGS, "en")
 
     # -- contract: types -------------------------------------------------------
 
@@ -325,7 +319,7 @@ class TestSuppressionAndCameraFeedback(unittest.TestCase):
         tracker = _FaultTracker(faults=(), stage=None)
 
         msgs = build_msgs(
-            [tracker], [None], [False], SQUAT, _MockVoice(), _CFG_MSGS, "en", qualities=["GOOD"]
+            [tracker], [None], [False], SQUAT, _CFG_MSGS, "en", qualities=["GOOD"]
         )
 
         self.assertEqual(msgs, [])
@@ -344,11 +338,11 @@ class TestSuppressionAndCameraFeedback(unittest.TestCase):
         tracker = _FaultTracker(faults=("upper_arm_drift",), stage="start")
 
         msgs_en = build_msgs(
-            [tracker], [165.0], [False], BICEP_CURL, _MockVoice(), _CFG_MSGS, "en",
+            [tracker], [165.0], [False], BICEP_CURL, _CFG_MSGS, "en",
             qualities=["WEAK"], trust=trust, cam_feedback=["cam_turn_left"],
         )
         msgs_ar = build_msgs(
-            [tracker], [165.0], [False], BICEP_CURL, _MockVoice(), _CFG_MSGS, "ar",
+            [tracker], [165.0], [False], BICEP_CURL, _CFG_MSGS, "ar",
             qualities=["WEAK"], trust=trust, cam_feedback=["cam_turn_left"],
         )
 
@@ -356,6 +350,86 @@ class TestSuppressionAndCameraFeedback(unittest.TestCase):
         self.assertTrue(msgs_ar)
         self.assertIn("turn", msgs_en[0][0].lower())
         self.assertNotEqual(msgs_en[0][0], msgs_ar[0][0])
+
+
+class _NoFaultTracker:
+    """Tracker that has no active faults — exercises the primary-signal angle fallback."""
+    def __init__(self, stage, rep_elapsed, end_range):
+        self.stage = stage
+        self.rep_elapsed = rep_elapsed
+        self.side = "right"
+        self.technique_state = {
+            "faults": (),
+            "signals": {"end_range": end_range},
+            "view": "unknown",
+            "fault_evaluations": {},
+        }
+
+
+class TestPrimarySignalAngleFallback(unittest.TestCase):
+    """
+    _profile_feedback() has a secondary path that fires when the fault engine
+    produced no faults but the primary-signal angle is out of range.  These
+    tests verify that path surfaces coaching even without a fault-engine hit.
+    """
+
+    _CFG = {"min_rep_time": 1.2, "exercise_thresholds": {}}
+
+    def _bicep_tracker(self, angle_above_end):
+        end_range = BICEP_CURL.technique_profile.end_thresholds["elbow_angle_deg"]
+        return _NoFaultTracker(stage="start", rep_elapsed=0.5,
+                               end_range=end_range), angle_above_end
+
+    def test_bicep_curl_high_angle_surfaces_curl_higher(self):
+        """Arm not curled enough → 'curl_higher' cue via angle fallback."""
+        end_range = BICEP_CURL.technique_profile.end_thresholds["elbow_angle_deg"]
+        # rep_elapsed must exceed min_rep_time (1.2 s) so slow_down doesn't win
+        tracker = _NoFaultTracker(stage="start", rep_elapsed=2.0, end_range=end_range)
+        angle = end_range[1] + 10.0   # clearly above the end threshold
+
+        msgs = build_msgs([tracker], [angle], [False], BICEP_CURL, self._CFG, "en",
+                          qualities=["GOOD"])
+
+        self.assertTrue(msgs, "Expected a coaching cue but got none")
+        text = msgs[0][0]
+        self.assertIn("higher", text.lower())
+
+    def test_no_cue_when_angle_is_within_range(self):
+        """Angle inside end_range → no ROM coaching from the fallback."""
+        end_range = BICEP_CURL.technique_profile.end_thresholds["elbow_angle_deg"]
+        mid = (end_range[0] + end_range[1]) / 2
+        tracker = _NoFaultTracker(stage="start", rep_elapsed=0.5, end_range=end_range)
+
+        msgs = build_msgs([tracker], [mid], [False], BICEP_CURL, self._CFG, "en",
+                          qualities=["GOOD"])
+
+        # No ROM cue — may get a positive hint but not a warning
+        for _, sev in msgs:
+            self.assertNotEqual(sev, "warning", "Unexpected warning when angle is in range")
+
+    def test_no_cue_when_quality_is_weak_for_primary_signal(self):
+        """WEAK quality blocks the primary-signal fallback (GOOD required for bicep curl)."""
+        end_range = BICEP_CURL.technique_profile.end_thresholds["elbow_angle_deg"]
+        tracker = _NoFaultTracker(stage="start", rep_elapsed=0.5, end_range=end_range)
+        angle = end_range[1] + 10.0
+
+        msgs = build_msgs([tracker], [angle], [False], BICEP_CURL, self._CFG, "en",
+                          qualities=["WEAK"])
+
+        warnings = [sev for _, sev in msgs if sev == "warning"]
+        self.assertEqual(warnings, [], "Fallback should be blocked under WEAK quality")
+
+    def test_elapsed_guard_prevents_immediate_cue(self):
+        """rep_elapsed ≤ 0.35 → no fallback cue (guards against start-of-rep noise)."""
+        end_range = BICEP_CURL.technique_profile.end_thresholds["elbow_angle_deg"]
+        tracker = _NoFaultTracker(stage="start", rep_elapsed=0.1, end_range=end_range)
+        angle = end_range[1] + 10.0
+
+        msgs = build_msgs([tracker], [angle], [False], BICEP_CURL, self._CFG, "en",
+                          qualities=["GOOD"])
+
+        warnings = [sev for _, sev in msgs if sev == "warning"]
+        self.assertEqual(warnings, [], "Fallback should not fire this early in a rep")
 
 
 if __name__ == "__main__":

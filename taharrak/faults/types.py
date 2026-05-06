@@ -42,3 +42,8 @@ class FaultRule:
     minimum_confidence: float = 0.38
     minimum_view_confidence: float = 0.0
     message_key: str | None = None
+    # HUD display metadata — "error" renders red, "warning" renders orange.
+    # "primary_signal" faults measure ROM directly; "secondary_signals" faults
+    # measure form quality and are suppressed under weaker tracking.
+    severity: str = "warning"
+    signal_kind: str = "secondary_signals"

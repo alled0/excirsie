@@ -1,7 +1,7 @@
 # Taharrak — Codebase Reference
 
-> Last updated: 2026-04-11  
-> 213 tests · all green · 4,188 lines across 17 source files
+> Last updated: 2026-05-06  
+> 266 tests · all green
 
 ---
 

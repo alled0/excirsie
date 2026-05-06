@@ -10,45 +10,15 @@ Pose analysis helpers for Taharrak.
 
 from taharrak.config import get_threshold, normalize_exercise_name
 from taharrak.exercises.base import Exercise
+from taharrak.faults.rules import FAULT_RULES as _ENGINE_FAULT_RULES
 from taharrak.kinematics.confidence import landmark_reliability as _landmark_reliability
 from taharrak.messages import t
 
 
-_FAULT_RULES = {
-    "1": {
-        "upper_arm_drift": ("keep_upper_arm_still", "warning", "secondary_signals"),
-        "trunk_swing": ("dont_swing_body", "error", "secondary_signals"),
-        "incomplete_rom": ("curl_higher", "warning", "primary_signal"),
-    },
-    "2": {
-        "excessive_lean_back": ("dont_lean_back", "error", "secondary_signals"),
-        "incomplete_lockout": ("finish_overhead", "warning", "primary_signal"),
-        "wrist_elbow_misstacking": ("stack_wrists_over_elbows", "warning", "secondary_signals"),
-    },
-    "3": {
-        "shrugging": ("shoulders_down", "warning", "secondary_signals"),
-        "raising_too_high": ("raise_to_shoulder_height", "warning", "primary_signal"),
-        "elbow_collapse": ("keep_soft_bend", "warning", "secondary_signals"),
-    },
-    "4": {
-        "elbow_flare": ("keep_elbows_in", "warning", "secondary_signals"),
-        "shoulder_drift": ("keep_shoulders_still", "warning", "secondary_signals"),
-        "excessive_lean_back": ("dont_lean_back", "error", "secondary_signals"),
-        "incomplete_extension": ("finish_extension", "warning", "primary_signal"),
-    },
-    "5": {
-        "insufficient_depth": ("sit_deeper", "warning", "primary_signal"),
-        "excessive_forward_lean": ("chest_up", "warning", "secondary_signals"),
-        "knee_collapse": ("knees_over_toes", "error", "secondary_signals"),
-    },
-}
-
-_POSITIVE_HINTS = {
-    "1": {"end": "lower_with_control"},
-    "2": {"start": "finish_overhead"},
-    "3": {"start": "raise_to_shoulder_height"},
-    "4": {"start": "finish_extension"},
-    "5": {"end": "stand_tall"},
+# Built once at import — FAULT_RULES never changes at runtime.
+_FAULT_RULE_LOOKUP: dict[str, dict] = {
+    key: {r.fault: r for r in rules}
+    for key, rules in _ENGINE_FAULT_RULES.items()
 }
 
 
@@ -73,7 +43,12 @@ def joint_reliability(lm) -> float:
 # ── Detection quality ─────────────────────────────────────────────────────────
 
 def det_quality_ex(lm, exercise: Exercise, cfg: dict) -> tuple:
-    """Returns (left_quality, right_quality) — each is 'GOOD', 'WEAK', or 'LOST'."""
+    """Returns (left_quality, right_quality) — each is 'GOOD', 'WEAK', or 'LOST'.
+
+    For non-bilateral exercises only the right-side joints are tracked, so
+    left_quality is returned as 'LOST' without computing reliability to avoid
+    wasted work on unused landmarks.
+    """
     VG, VW = cfg.get("vis_good", 0.68), cfg.get("vis_weak", 0.38)
 
     def _q(indices):
@@ -82,7 +57,10 @@ def det_quality_ex(lm, exercise: Exercise, cfg: dict) -> tuple:
         if all(r > VW for r in rel): return "WEAK"
         return "LOST"
 
-    return _q(exercise.joints_left), _q(exercise.joints_right)
+    r_q = _q(exercise.joints_right)
+    if not exercise.bilateral:
+        return "LOST", r_q
+    return _q(exercise.joints_left), r_q
 
 
 # ── Camera position analysis ──────────────────────────────────────────────────
@@ -213,19 +191,25 @@ def _profile_feedback(tracker, angle: float | None, exercise: Exercise,
     if profile is None:
         return None
 
-    fault_rules = _FAULT_RULES.get(exercise.key, {})
+    fault_rule_lookup = _FAULT_RULE_LOOKUP.get(exercise.key, {})
     tech_state = getattr(tracker, "technique_state", {}) or {}
     side_ln = t(lang, getattr(tracker, "side", "")) if exercise.bilateral else ""
 
     for fault in profile.top_faults:
-        meta = fault_rules.get(fault)
-        if meta is None or fault not in tech_state.get("faults", ()):
+        rule = fault_rule_lookup.get(fault)
+        if rule is None or fault not in tech_state.get("faults", ()):
             continue
-        cue_key, severity, signal_kind = meta
-        requirement = profile.confidence_requirements.get(signal_kind)
+        requirement = profile.confidence_requirements.get(rule.signal_kind)
         if _quality_meets(quality, requirement):
-            return _format_profile_cue(lang, cue_key, side_ln, exercise.bilateral), severity
+            return _format_profile_cue(lang, rule.message_key, side_ln, exercise.bilateral), rule.severity
 
+    # ── Primary-signal angle fallback ─────────────────────────────────────────
+    # The fault-engine loop above handles detected faults.  This block is a
+    # separate, lighter fallback: it fires when the fault engine couldn't run
+    # (view/quality gating suppressed the fault) but we still have a reliable
+    # angle (primary_signal quality passes).  It checks ROM directly rather
+    # than relying on fault frames, so it gives instant feedback at rep
+    # boundaries without waiting for fault accumulation.
     if angle is None or not _quality_meets(
         quality, profile.confidence_requirements.get("primary_signal")
     ):
@@ -261,7 +245,10 @@ def _profile_feedback(tracker, angle: float | None, exercise: Exercise,
 
 
 def _profile_hint(tracker, exercise: Exercise, lang: str) -> str | None:
-    cue_key = _POSITIVE_HINTS.get(exercise.key, {}).get(tracker.stage)
+    profile = exercise.technique_profile
+    if profile is None:
+        return None
+    cue_key = profile.positive_cue_by_stage.get(tracker.stage)
     if cue_key is None:
         return None
     side_ln = t(lang, getattr(tracker, "side", "")) if exercise.bilateral else ""
@@ -277,7 +264,8 @@ _SEVERITY_ORDER = {"error": 0, "warning": 1, "ok": 2}
 
 
 def build_msgs(trackers: list, angles: list, swings: list,
-               exercise: Exercise, voice, cfg: dict, lang: str,
+               exercise: Exercise, cfg: dict, lang: str,
+               voice=None,
                qualities: list[str] | None = None,
                trust = None,
                cam_feedback: list[str] | None = None) -> list:
@@ -312,7 +300,7 @@ def build_msgs(trackers: list, angles: list, swings: list,
             candidates.append((*profile_msg, None))
 
         if profile_msg is None and swinging and (qualities is None or qualities[i] == "GOOD"):
-            vtext = f"Stop swinging your {side_en.lower()} side"
+            vtext = f"Stop swinging your {side_en.lower()} side" if voice is not None else None
             candidates.append((f"  {t(lang, 'swing_warn', side=side_ln)}", "error", vtext))
 
         if angle is None:
@@ -330,13 +318,14 @@ def build_msgs(trackers: list, angles: list, swings: list,
                 candidates.append((f"  {t(lang, 'press_up', side=side_ln)}", "warning", None))
 
         if 0 < tracker.rep_elapsed < cfg.get("min_rep_time", 1.2):
-            candidates.append((f"  {t(lang, 'slow_down', side=side_ln)}", "error", "Slow down"))
+            candidates.append((f"  {t(lang, 'slow_down', side=side_ln)}", "error",
+                                "Slow down" if voice is not None else None))
 
     # ── One-cue policy ────────────────────────────────────────────────
     if candidates:
         candidates.sort(key=lambda c: _SEVERITY_ORDER.get(c[1], 9))
         text, severity, vtext = candidates[0]
-        if vtext:
+        if vtext and voice is not None:
             voice.say(vtext, 4.0)
         return [(text, severity)]
 

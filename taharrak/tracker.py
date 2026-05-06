@@ -297,6 +297,7 @@ from taharrak.data_logging.schema import FaultRecord, RepRecord
 from taharrak.exercises import Exercise
 from taharrak.faults.engine import FaultEngine
 from taharrak.faults.types import RepContext
+from taharrak.kinematics.confidence import landmark_reliability as joint_reliability
 from taharrak.kinematics.features import build_kinematics_frame
 from taharrak.phase import ExercisePhaseFSM
 
@@ -372,6 +373,8 @@ class RepTracker:
         self.rep_elapsed    = 0.0
         self.last_processing_path = "idle"
         self.processing_path_counts = {"kinematics": 0, "fallback": 0}
+        self._legacy_path_hits = 0   # incremented by _update_technique_state_legacy()
+        self._range_key_warned = False  # set True after first _profile_angle_ranges fallback
         self.technique_state = {
             "faults": (),
             "signals": {},
@@ -557,14 +560,28 @@ class RepTracker:
 
         return angle, swinging, rep_done, score
 
+    _KNOWN_RANGE_KEYS = ("elbow_angle_deg", "shoulder_abduction_deg", "knee_angle_deg")
+
     def _profile_angle_ranges(self) -> tuple[tuple[float, float], tuple[float, float]]:
         profile = self.exercise.technique_profile
 
-        def _range(thresholds: dict, fallback: float) -> tuple[float, float]:
-            for key in ("elbow_angle_deg", "shoulder_abduction_deg", "knee_angle_deg"):
+        def _range(thresholds: dict, fallback: float, label: str) -> tuple[float, float]:
+            for key in self._KNOWN_RANGE_KEYS:
                 value = thresholds.get(key)
                 if isinstance(value, tuple) and len(value) == 2:
                     return float(value[0]), float(value[1])
+            # None of the recognised keys matched — warn once so a developer
+            # adding a new exercise with a different threshold key notices.
+            if not self._range_key_warned:
+                self._range_key_warned = True
+                import warnings
+                warnings.warn(
+                    f"[Taharrak] RepTracker ({self.exercise.key}): "
+                    f"{label}_thresholds has no recognised angle key "
+                    f"(expected one of {self._KNOWN_RANGE_KEYS}). "
+                    f"Falling back to exercise.angle_down/up — scoring may be inaccurate.",
+                    stacklevel=4,
+                )
             return float(fallback), float(fallback)
 
         if profile is None:
@@ -573,8 +590,8 @@ class RepTracker:
                 (float(self.exercise.angle_up), float(self.exercise.angle_up)),
             )
         return (
-            _range(profile.start_thresholds, self.exercise.angle_down),
-            _range(profile.end_thresholds, self.exercise.angle_up),
+            _range(profile.start_thresholds, self.exercise.angle_down, "start"),
+            _range(profile.end_thresholds, self.exercise.angle_up, "end"),
         )
 
     def _update_technique_state(self, angle: float,
@@ -667,6 +684,46 @@ class RepTracker:
                     self._fault_frames[fault] += 1
             return
 
+        # landmarks=None → kinematics path unavailable; fall back to normalised-
+        # coordinate heuristics.  This path is reachable when callers omit
+        # landmarks= but should never fire in normal desktop or web operation.
+        # TODO: instrument hit count over one full release cycle; if zero,
+        # delete after confirming no public caller depends on it.
+        faults, signals = self._update_technique_state_legacy(
+            key, angle, p_n, v_n, d_n, swinging, signals, end_range
+        )
+
+        self.technique_state = {
+            "faults": faults,
+            "signals": signals,
+            "view": self.exercise.technique_profile.preferred_view
+                    if self.exercise.technique_profile else "unknown",
+            "processing_path": self.last_processing_path,
+        }
+        if self._in_rep:
+            for fault in faults:
+                self._fault_frames[fault] += 1
+
+    def _update_technique_state_legacy(
+        self,
+        key: str,
+        angle: float,
+        p_n: tuple,
+        v_n: tuple,
+        d_n: tuple,
+        swinging: bool,
+        signals: dict,
+        end_range: tuple,
+    ) -> tuple[tuple, dict]:
+        """
+        Coordinate-heuristic fault detection used when kinematics landmarks are
+        unavailable (landmarks=None path).  Isolated here so it can be
+        instrumented and eventually removed once the kinematics path is proven
+        to cover all callers.
+        """
+        self._legacy_path_hits += 1
+        faults: list[str] = []
+
         if key == "1":
             drift = abs(v_n[0] - p_n[0])
             signals["upper_arm_drift"] = round(drift, 4)
@@ -705,17 +762,7 @@ class RepTracker:
             if self.stage == "start" and self.rep_elapsed > 0.45 and angle > end_range[1]:
                 faults.append("insufficient_depth")
 
-        faults = tuple(dict.fromkeys(faults))
-        self.technique_state = {
-            "faults": faults,
-            "signals": signals,
-            "view": self.exercise.technique_profile.preferred_view
-                    if self.exercise.technique_profile else "unknown",
-            "processing_path": self.last_processing_path,
-        }
-        if self._in_rep:
-            for fault in faults:
-                self._fault_frames[fault] += 1
+        return tuple(dict.fromkeys(faults)), signals
 
     def _begin_rep(self, now: float | None = None) -> None:
         self.stage             = "start"
@@ -1077,10 +1124,13 @@ class RepTracker:
 # ── Voice Engine ──────────────────────────────────────────────────────────────
 
 class VoiceEngine:
+    _MAX_TRACKED_MSGS = 64   # cap on distinct message strings remembered for cooldown
+
     def __init__(self, enabled: bool, rate: int = 160):
+        from collections import OrderedDict
         self._enabled = enabled and _TTS_OK
         self._q: queue.Queue = queue.Queue(maxsize=3)
-        self._last: dict     = {}
+        self._last: OrderedDict = OrderedDict()   # msg → last-spoken timestamp
         if self._enabled:
             t = threading.Thread(target=self._worker, args=(rate,), daemon=True)
             t.start()
@@ -1092,6 +1142,9 @@ class VoiceEngine:
         if now - self._last.get(msg, 0) < cooldown:
             return
         self._last[msg] = now
+        self._last.move_to_end(msg)
+        if len(self._last) > self._MAX_TRACKED_MSGS:
+            self._last.popitem(last=False)   # evict oldest entry
         try:
             self._q.put_nowait(msg)
         except queue.Full:
@@ -1158,8 +1211,6 @@ class TrackingGuard:
         trackers : list of RepTracker instances
         exercise : current Exercise (for key-joint indices)
         """
-        from taharrak.analysis import joint_reliability  # late import — avoids circular dep
-
         now    = time.time()
         fired  = False
 

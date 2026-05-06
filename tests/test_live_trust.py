@@ -10,10 +10,6 @@ from taharrak.messages import t
 from taharrak.tracker import LiveDiagnostics, LiveTrustGate
 
 
-class _Voice:
-    def say(self, *args, **kwargs):
-        pass
-
 
 class _Tracker:
     def __init__(self, side="left", stage=None, rep_elapsed=0.0, rep_count=0,
@@ -130,7 +126,6 @@ class TestCoachingFallback(unittest.TestCase):
             [170.0, 170.0],
             [True, True],
             BICEP_CURL,
-            _Voice(),
             {"min_rep_time": 1.2},
             "en",
             qualities=["WEAK", "GOOD"],
@@ -153,7 +148,6 @@ class TestCoachingFallback(unittest.TestCase):
             [170.0],
             [False],
             BICEP_CURL,
-            _Voice(),
             {"min_rep_time": 1.2},
             "en",
             qualities=["GOOD"],

@@ -18,6 +18,10 @@ class TechniqueProfile:
     top_faults: tuple[str, ...] = ()
     coaching_cues: tuple[str, ...] = ()
     confidence_requirements: dict[str, Any] = field(default_factory=dict)
+    # Positive cues shown when no fault is active, keyed by tracker stage
+    # ("start" = rep in progress, "end" = rep finished / at start position).
+    # Replaces the old _POSITIVE_HINTS dict in analysis.py.
+    positive_cue_by_stage: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

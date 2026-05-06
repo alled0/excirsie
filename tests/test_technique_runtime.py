@@ -21,10 +21,6 @@ CFG = {
 }
 
 
-class _Voice:
-    def say(self, *args, **kwargs):
-        pass
-
 
 class _StubTracker:
     def __init__(self, side="right", stage=None, rep_elapsed=0.0, faults=(), signals=None):
@@ -198,7 +194,7 @@ class TestTechniqueFeedbackSelection(unittest.TestCase):
                     signals={"end_range": exercise.technique_profile.end_thresholds.get("elbow_angle_deg", exercise.technique_profile.end_thresholds.get("shoulder_abduction_deg", exercise.technique_profile.end_thresholds.get("knee_angle_deg", (0.0, 0.0))))},
                 )
                 msgs = build_msgs(
-                    [tracker], [None], [False], exercise, _Voice(), CFG, "en", qualities=["GOOD"]
+                    [tracker], [None], [False], exercise, CFG, "en", qualities=["GOOD"]
                 )
                 self.assertTrue(msgs)
                 self.assertIn(text, msgs[0][0])
@@ -211,7 +207,7 @@ class TestTechniqueFeedbackSelection(unittest.TestCase):
         )
 
         msgs = build_msgs(
-            [tracker], [None], [False], exercise, _Voice(), CFG, "en", qualities=["WEAK"]
+            [tracker], [None], [False], exercise, CFG, "en", qualities=["WEAK"]
         )
 
         self.assertEqual(msgs, [])
@@ -225,7 +221,7 @@ class TestTechniqueFeedbackSelection(unittest.TestCase):
         )
 
         msgs = build_msgs(
-            [tracker], [None], [False], exercise, _Voice(), CFG, "en", qualities=["GOOD"]
+            [tracker], [None], [False], exercise, CFG, "en", qualities=["GOOD"]
         )
 
         self.assertTrue(msgs)

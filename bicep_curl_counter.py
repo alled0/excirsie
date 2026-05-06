@@ -29,7 +29,7 @@ from taharrak.tracker    import (RepTracker, VoiceEngine, OneEuroLandmarkSmoothe
 from taharrak.analysis   import (det_quality_ex, build_msgs, build_post_rep_summary,
                                   analyze_camera_position, check_exercise_framing)
 from taharrak.correction import CorrectionEngine
-from taharrak.session    import save_csv, persist_session
+from taharrak.session    import save_csv, save_events_csv, persist_session
 from taharrak.messages   import t
 from taharrak.database   import (init_db, get_last_sessions,
                                   get_last_weight, check_overload_suggestion,
@@ -412,7 +412,8 @@ def main():
                     msgs = _active_post_rep
                 else:
                     msgs = build_msgs(trackers, angles, swings,
-                                      exercise, voice, cfg, lang,
+                                      exercise, cfg, lang,
+                                      voice=voice,
                                       qualities=quals, trust=trust,
                                       cam_feedback=cam_feedback)
 
@@ -548,6 +549,7 @@ def main():
                     persist_session(cfg, trackers, exercise,
                                     weight_kg, set_count, session_start)
                     save_csv(trackers)
+                    save_events_csv(trackers)
                     summary_start = time.time()
                     state = "SUMMARY"
                 elif key == ord("s"):
@@ -573,6 +575,7 @@ def main():
                     persist_session(cfg, trackers, exercise,
                                     weight_kg, set_count, session_start)
                     save_csv(trackers)
+                    save_events_csv(trackers)
                     summary_start = time.time()
                     state = "SUMMARY"
 

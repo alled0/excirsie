@@ -24,6 +24,7 @@ _TECHNIQUE = TechniqueProfile(
         "primary_signal": "GOOD",
         "secondary_signals": "GOOD",
     },
+    positive_cue_by_stage={"start": "finish_overhead"},
 )
 
 SHOULDER_PRESS = Exercise(

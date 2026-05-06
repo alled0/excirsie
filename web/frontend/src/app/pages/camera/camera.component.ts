@@ -44,6 +44,11 @@ export class CameraComponent implements OnInit, OnDestroy {
   private captureBusy = false;
   private subs = new Subscription();
 
+  // Session-level accumulators for the save payload
+  private sessionStartMs = 0;
+  private framesTotal = 0;
+  private framesDetected = 0;
+
   // Target send rate. Backpressure in the socket service drops stale frames.
   private readonly CAPTURE_MS = 80;
   private readonly CAPTURE_MAX_WIDTH = 360;
@@ -85,6 +90,8 @@ export class CameraComponent implements OnInit, OnDestroy {
     this.subs.add(
       this.socket.feedback$.subscribe((fb) => {
         this.feedback = fb;
+        this.framesTotal++;
+        if (fb.detected) this.framesDetected++;
         this.drawOverlay();
         this.scheduleOverlayExpiry();
       })
@@ -117,6 +124,9 @@ export class CameraComponent implements OnInit, OnDestroy {
   startSession(): void {
     if (!this.selectedKey || !this.cameraActive) return;
     this.feedback = null;
+    this.framesTotal = 0;
+    this.framesDetected = 0;
+    this.sessionStartMs = Date.now();
     this.clearOverlay();
     this.socket.connect(this.selectedKey);
     this.sessionActive = true;
@@ -135,13 +145,25 @@ export class CameraComponent implements OnInit, OnDestroy {
     // Save the session to history if any reps were counted
     if (this.feedback && this.feedback.reps_total > 0) {
       const exerciseName = this.exercises.find((e) => e.key === this.selectedKey)?.name ?? '';
+      const durationS = Math.round((Date.now() - this.sessionStartMs) / 1000);
+      const dropoutRate = this.framesTotal > 0
+        ? +(1 - this.framesDetected / this.framesTotal).toFixed(4)
+        : null;
+      const fpsMean = durationS > 0
+        ? +(this.framesTotal / durationS).toFixed(1)
+        : null;
       this.api.saveSession({
-        exerciseKey:  this.selectedKey,
-        exerciseName: exerciseName,
-        source:       'live',
-        repsTotal:    this.feedback.reps_total,
-        repsLeft:     this.feedback.reps_left  ?? null,
-        repsRight:    this.feedback.reps_right ?? null,
+        exerciseKey:    this.selectedKey,
+        exerciseName:   exerciseName,
+        source:         'live',
+        repsTotal:      this.feedback.reps_total,
+        repsLeft:       this.feedback.reps_left  ?? null,
+        repsRight:      this.feedback.reps_right ?? null,
+        framesTotal:    this.framesTotal,
+        framesDetected: this.framesDetected,
+        dropoutRate,
+        fpsMean,
+        durationS,
       }).subscribe();
     }
   }

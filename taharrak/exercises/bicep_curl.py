@@ -18,6 +18,7 @@ _TECHNIQUE = TechniqueProfile(
         "primary_signal": "GOOD",
         "secondary_signals": "WEAK_OR_BETTER",
     },
+    positive_cue_by_stage={"end": "lower_with_control"},
 )
 
 BICEP_CURL = Exercise(
